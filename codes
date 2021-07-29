@@ -1,0 +1,4674 @@
+---
+title: "SCLC heterogeneity and genomic correlates of response to therapies"
+output: html_notebook
+---
+
+***************************** Data Cleaning ******************************
+
+Calculate z-scores 
+```{r}
+# Open file
+# (Change relative path accordingly)
+Thomas_RNASeq_Zscore_log2_TMM_FPKM <- read.delim("~/Desktop/Book.txt", row.names=1)
+head(Thomas_RNASeq_Zscore_log2_TMM_FPKM)
+
+
+# Transpose because z-score are calculated per column
+transposed_matrix <- t(Thomas_RNASeq_Zscore_log2_TMM_FPKM)
+
+# Calculate z-score and retranspose
+z_tr_mt <- scale(transposed_matrix)
+z_score <- t(z_tr_mt)
+
+# Save file
+# (Change working directory accordingly)
+setwd("~/Desktop")
+write.csv(z_score, 'Thomas_RNASeq_Zscore_log2_TMM_FPKM.csv')
+```
+
+
+
+Calculate ssGSEA NE scores
+```{r}
+library(tidyverse)
+library(GSVA)
+library(writexl)
+library(dplyr)
+
+
+# Open file
+exp_tbl <- read.delim("~/Desktop/Thomas_RNASeq_log2_TMM_FPKM.txt")
+
+# 10 gene NE high from Bluemn et al paper.
+ne10 <- c("SCG3", "CHGA", "CHGB", "CHRNB2", "PCSK1", 
+          "ELAVL4", "ENO2", "SCN3A", "SYP", "NKX2-1")
+
+# 25 high in neuroendocrine subtype genes from Gazdar et al. paper.
+sclc_ne_genes <- c("ASCL1", "BEX1", "BSN", "CELF3", "CHGA", 
+                   "CHGB","CRMP1", "FAM57B", "INSM1", "KIF1A", 
+                   "KIF5C", "MYT1", "RTN1", "RUNDC3A", "SCG3", 
+                   "SEZ6", "SH3GL2", "SYN1", "SYP", "SYT11", 
+                   "SYT4", "TAGLN3" ,"TFF3", "TMSB15A", "TMSB15B")
+
+# 25 high in non-neuroendocrine subtype genes from Gazdar et al. paper.
+sclc_non_ne_genes <- c("ABCC3", "AHNAK", "ANXA1", "ARHGDIB", "CAV1",
+                       "CAV2", "CCND1", "CYR61", "EMP1", "EPHA2",
+                       "IFITM2", "IFITM3", "ITGB4", "LGALS3", "MYOF",
+                       "PLAU", "PTGES", "RAB27B", "S100A10", "S100A16",
+                       "SLC16A5", "TACSTD2", "TGFBI", "TGFBR2", "YAP1")
+
+# Checking that expected genes are in expression data table.
+# if not run, e.g., setdiff(my_gene_set, exp_tbl$Gene_Symbol) to find which
+# are missing; then check for alternative names in GeneCards.
+stopifnot(
+  all(ne10 %in% exp_tbl$gene_symbol),
+  all(sclc_ne_genes %in% exp_tbl$gene_symbol),
+  all(sclc_non_ne_genes %in% exp_tbl$gene_symbol)
+)
+
+
+
+
+# Compute a table of ssGSEA (Single Sample Gene Set Enrichment Analysis)
+# scores for a list of gene sets.
+# PARAMETERS:
+# X: A gene expression data table with gene names in the first column,
+#    followed by sample-specific gene expression columns.
+#
+# gene_sets: A named list object with character vectors indicating 
+#            gene sets for which ssGSEA scores are to be computed.
+
+get_ssgsea_table <- function(X, gene_sets) {
+  if (is.data.frame(X)) {
+    X <- X %>%
+      tibble::column_to_rownames(colnames(.)[[1]]) %>%
+      as.data.frame() %>%
+      as.matrix()
+  }
+  stopifnot(!any(duplicated(rownames(X))), is.numeric(X))
+  
+ # Remove genes w/constant expression
+ #gene_sdev <- apply(X, MARGIN = 1, FUN = stats::sd)
+ #X <- X[gene_sdev != 0, , drop = FALSE]
+  
+ set.seed(1)
+ ssgsea_tab <- GSVA::gsva(expr = X, gset.idx.list = gene_sets,
+                          method = 'ssgsea', kcdf = "Gaussian",
+                          verbose=FALSE) %>%
+                          t() %>%
+                          as.data.frame() %>%
+                          tibble::rownames_to_column(var = "sample_id") %>%
+                          tibble::as_tibble()
+
+  return(ssgsea_tab)
+}
+
+
+
+
+
+# Compute Various ssGSEA-Based Neuroendocrine Scores
+# Construct list object with gene sets for which ssGSEA scores will be computed
+gsets <- list(
+  NE10 = ne10,
+  SCLC_Neuroendocrine = sclc_ne_genes,
+  SCLC_Non_Neuroendocrine = sclc_non_ne_genes
+)
+
+
+ne_scores_tbl <- get_ssgsea_table(X = exp_tbl, gene_sets = gsets)
+
+# Our Neuroendocrine score is the difference between the ssGSEA scores
+# using the Gazdar NE and non-NE gene sets. Adding a column with this below:
+ne_scores_tbl <- ne_scores_tbl %>%
+  dplyr::mutate(
+    NE50  = SCLC_Neuroendocrine - SCLC_Non_Neuroendocrine
+  )
+
+writexl::write_xlsx(ne_scores_tbl, path = "~/Desktop/Review/Final figures/Raw data/ne_scores_tbl.xlsx")
+```
+
+
+Calculate ssGSEA EMT scores
+```{r}
+library(tidyverse)
+library(GSVA)
+library(writexl)
+library(dplyr)
+
+
+# Open file
+exp_tbl <- read.delim("~/Desktop/Thomas_RNASeq_log2_TMM_FPKM.txt")
+
+# EMT genes high from Kohn et al
+EMTup <- c("AP1M1", "BICD2", "CCDC88A", "CHST10", "CMTM3", "DYRK3", "ELOVL5", "EMP3", "ETS1", "FAM126A",
+           "GNB4", "IKBIP", "LEPRE1", "LIX1L", "LRP12", "MAP7D1", "MAP7D3", "MSN", "NR3C1",
+           "QKI", "RECK", "SACS", "SLC35B4", "SOAT1", "SPG20", "ST3GAL3", "STARD9", "SYDE1", "VIM")
+
+# EMT genes down previously reported from Kohn et al
+EMTdown_1 <- c("ADAP1", "ANXA9", "AP1M2", "ATP2C2", "BSPRY", "CAMSAP3","CBLC", "CDH1", 
+               "CGN", "CLDN3", "CLDN4", "CLDN7", "CRB3", "EHF", "ELL3", "ELMO3", "EPCAM",
+               "EPHA1", "EPN3", "ESRP1", "ESRP2","GRHL1", "GRHL2", "IL17RE", "IRF6", "LLGL2", 
+               "LNX1", "MACC1", "MAPK15", "MARVELD2", "MARVELD3", "MYO5B", "OVOL1", "OVOL2",
+               "PLEKHG6", "PPL", "PRSS8", "RAB25", "RNF43", "S100A14", "SCNN1A", "SPINT1", "ST14","TJP3")
+
+# EMT genes down non previously reported from Kohn et al
+EMTdown_2 <- c("ARHGEF16", "B3GNT3", "C11orf52","C1orf172", "C1orf210", "C9orf152", "CCDC64B", "CDC42BPG",
+               "CDS1", "CNKSR1", "FAM83B", "GOLT1A", "GRTP1", "GYLTL1B", "HID1", "ILDR1", "KRTCAP3", "LAD1",
+               "MAPK13", "MPZL2", "MPZL3", "PPP1R14D", "PRR15L", "PRRG2", "PRSS22", "SLC37A1", "SOWAHB",      
+               "SULT2B1","TBC1D30", "TMC4", "TMEM125", "ZNF165")
+
+# EMT genes down from Kohn et al
+EMTdown <- c("ARHGEF16", "B3GNT3", "C11orf52","C1orf172", "C1orf210", "C9orf152", "CCDC64B", "CDC42BPG",
+              "CDS1", "CNKSR1", "FAM83B", "GOLT1A", "GRTP1", "GYLTL1B", "HID1", "ILDR1", "KRTCAP3", "LAD1",
+              "MAPK13", "MPZL2", "MPZL3", "PPP1R14D", "PRR15L", "PRRG2", "PRSS22", "SLC37A1", "SOWAHB",   
+              "SULT2B1","TBC1D30", "TMC4", "TMEM125", "ZNF165", "ADAP1", "ANXA9", "AP1M2", "ATP2C2", "BSPRY", 
+              "CAMSAP3","CBLC", "CDH1", "CGN", "CLDN3", "CLDN4", "CLDN7", "CRB3", "EHF", "ELL3", "ELMO3",  
+              "EPCAM", "EPHA1", "EPN3", "ESRP1", "ESRP2","GRHL1", "GRHL2", "IL17RE", "IRF6", "LLGL2", "LNX1", 
+              "MACC1", "MAPK15", "MARVELD2", "MARVELD3", "MYO5B", "OVOL1", "OVOL2","PLEKHG6", "PPL", "PRSS8", 
+              "RAB25", "RNF43", "S100A14", "SCNN1A", "SPINT1", "ST14","TJP3")
+
+# EMT genes high from Anastassiou et al
+EMTAnastassiou <- c("ACTA2", "ASPN", "BGN", "CDH11", "COL11A1", "COL1A1", "COL3A1", "COL5A1", "COL5A2", 
+                    "COL6A3", "CTSK", "EDNRA", "FBN1", "FN1", "GLT8D2", "LGALS1", "LOXL2", "LUM", 
+                    "MMP2", "NID2", "PDGFRB", "PRRX1", "SERPINF1", "SNAI2", "SPARC", "SULF1",
+                    "THBS2", "TIMP3", "VCAN")
+
+
+# Checking that expected genes are in expression data table.
+# if not run, e.g., setdiff(my_gene_set, exp_tbl$Gene_Symbol) to find which
+# are missing; then check for alternative names in GeneCards.
+stopifnot(all(EMTup %in% exp_tbl$gene_symbol),
+  all(EMTdown_1 %in% exp_tbl$gene_symbol),
+  all(EMTdown_2 %in% exp_tbl$gene_symbol),
+  all(EMTdown %in% exp_tbl$gene_symbol),
+  all(EMTAnastassiou %in% exp_tbl$gene_symbol)
+  )
+
+
+# Compute a table of ssGSEA (Single Sample Gene Set Enrichment Analysis)
+# scores for a list of gene sets.
+# PARAMETERS:
+# X: A gene expression data table with gene names in the first column,
+#    followed by sample-specific gene expression columns.
+#
+# gene_sets: A named list object with character vectors indicating 
+#            gene sets for which ssGSEA scores are to be computed.
+
+get_ssgsea_table <- function(X, gene_sets) {
+  if (is.data.frame(X)) {
+    X <- X %>%
+      tibble::column_to_rownames(colnames(.)[[1]]) %>%
+      as.data.frame() %>%
+      as.matrix()
+  }
+  stopifnot(!any(duplicated(rownames(X))), is.numeric(X))
+  
+ # Remove genes w/constant expression
+ #gene_sdev <- apply(X, MARGIN = 1, FUN = stats::sd)
+ #X <- X[gene_sdev != 0, , drop = FALSE]
+  
+ set.seed(1)
+ ssgsea_tab <- GSVA::gsva(expr = X, gset.idx.list = gene_sets,
+                          method = 'ssgsea', kcdf = "Gaussian",
+                          verbose=FALSE) %>%
+                          t() %>%
+                          as.data.frame() %>%
+                          tibble::rownames_to_column(var = "sample_id") %>%
+                          tibble::as_tibble()
+
+  return(ssgsea_tab)
+}
+
+
+
+# Compute Various ssGSEA-Based Neuroendocrine Scores
+# Construct list object with gene sets for which ssGSEA scores will be computed
+gsets <- list(EMT_upregulated = EMTup, 
+              EMTdown_previously_known = EMTdown_1,
+              EMTdown_previously_not_known = EMTdown_2,
+              EMT_down = EMTdown, 
+              EMTAnastassiou = EMTAnastassiou
+              )
+
+
+ne_scores_tbl <- get_ssgsea_table(X = exp_tbl, gene_sets = gsets)
+
+# Our Neuroendocrine score is the difference between the ssGSEA scores
+# using the Gazdar NE and non-NE gene sets. Adding a column with this below:
+ne_scores_tbl <- ne_scores_tbl %>%
+                 dplyr::mutate(EMT_Kohn_reported  = EMT_upregulated - EMTdown_previously_known) %>%
+                 dplyr::mutate(EMT_Kohn = EMT_upregulated - EMT_down)
+
+writexl::write_xlsx(ne_scores_tbl, path = "~/Desktop/Review/Final figures/Figure 3/Figure 3g/EMT_scores_tbl.xlsx")
+```
+
+
+
+
+
+Select the genes from NE10, NE50 and NE70 signatures
+```{r}
+library(dplyr)
+
+# Open file
+Zscore <- read.delim("~/Desktop/Thomas_RNASeq_Zscore_log2_TMM_FPKM.txt")
+
+# Select genes from NE50, NE10 and NE70 signatures
+NEgene_list <- Zscore %>% filter(Zscore$gene_symbol %in% c("CHGA", "CHGB", "CHRNB2", "PCSK1","ELAVL4", "ENO2", "SCN3A", "NKX2-1", "ASCL1", "BEX1", "BSN", "CELF3", "CRMP1", "FAM57B", "INSM1", "KIF1A", "KIF5C", "MYT1", "RTN1", "RUNDC3A", "SH3GL2", "SYN1", "SYP", "SYT4", "TAGLN3" ,"TFF3", "TMSB15A", "TMSB15B","ABCC3", "AHNAK", "ANXA1", "ARHGDIB", "CAV1", "CAV2", "CCND1", "CYR61", "EMP1", "EPHA2","IFITM2", "IFITM3", "ITGB4", "LGALS3", "MYOF","PLAU", "PTGES", "RAB27B", "S100A10", "S100A16","SLC16A5", "TACSTD2", "TGFBI", "TGFBR2", "YAP1", 'AR', 'ARHGAP8', 'ASXL3', 'AURKA', 'BRINP1', 'CAND2', 'LRRC16B','CATSPERB',
+'CCND1_70', 'CIITA','CREBBP','CSDE1','CYLD','DICER1','DNMT1','EFNA4','EPN3','ETV5','EVPL',
+'EZH2','FHIT','FOXP1','GATA2','GNAO1','GPX2','HERPUD1','HOXB13','JAKMIP2','KCNB2','KCND2',
+'KIAA0408','KLK3','KLK4','LMAN1L','MAP10','MAPKAPK3','MMP2','MYCN','MYH9','NKX3-1','NRSN1',
+'NUP93','OPHN1','PAX8','PCSK1','PIEZO1','PROX1','PRR5-ARHGAP8','PSCA','RAB27B','RB1',
+'RBBP6','RGS10','RGS7','RIPK2','SCG3','SEC11C','SEZ6','SLC25A37','SLC44A4','SOGA3',
+'SPDEF','ST8SIA3','SVOP','SYT11','TC2N','TRIM33','TRIM9','UPK2'))
+
+writexl::write_xlsx(NEgene_list, path = "~/Desktop/NEgene_list.xlsx")
+```
+
+
+
+
+******************** Figure 1A ****************
+
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(RColorBrewer)
+
+piechart_data <- read_excel("~/Desktop/Review/Final figures/Figure 1/Figure 1a/Pie_charts.xlsx", sheet = "Histology")
+head(piechart_data)
+
+# Compute the position of labels 
+piechart_data <- piechart_data %>% 
+                 arrange(desc(Group)) %>%
+                 mutate(prop = Value / sum(piechart_data$Value) *100) %>%
+                 mutate(ypos = cumsum(prop)- 0.5*prop)
+
+# Basic piechart
+ggplot(piechart_data, aes(x="", y=prop, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() + 
+  theme(legend.position="none") +
+  
+  geom_text(aes(y = ypos, label = Group), color = "black", size=4) +
+  scale_fill_manual(values =c("#ffff33", "#2b8cbe"))
+```
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 1/Figure 1a")
+
+pdf(file = "Figure 1a_Pie Chart_Histology.pdf", width = 1.5, height = 1.5)
+
+ggplot(piechart_data, aes(x="", y=prop, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() + 
+  theme(legend.position="none") +
+  
+  geom_text(aes(y = ypos, label = Group), color = "black", size=1.8) +
+  scale_fill_manual(values =c("#2b8cbe", "#ffff33"))
+
+dev.off()
+```
+
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(RColorBrewer)
+
+piechart_data <- read_excel("~/Desktop/Review/Final figures/Figure 1/Figure 1a/Pie_charts.xlsx", sheet = "Stage")
+head(piechart_data)
+
+# Compute the position of labels 
+piechart_data <- piechart_data %>% 
+                 arrange(desc(Group)) %>%
+                 mutate(prop = Value / sum(piechart_data$Value) *100) %>%
+                 mutate(ypos = cumsum(prop)- 0.5*prop)
+
+# Basic piechart
+ggplot(piechart_data, aes(x="", y=prop, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() + 
+  theme(legend.position="none") +
+  
+  geom_text(aes(y = ypos, label = Group), color = "black", size=4) +
+  scale_fill_manual(values =c("#8856a7", "#9ebcda", "#e0ecf4"))
+```
+
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 1/Figure 1a")
+
+pdf(file = "Figure 1a_Pie Chart_Stage.pdf", width = 1.5, height = 1.5)
+
+ggplot(piechart_data, aes(x="", y=prop, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() + 
+  theme(legend.position="none") +
+  
+  geom_text(aes(y = ypos, label = Group), color = "black", size=1.8) +
+  scale_fill_manual(values =c("#8856a7", "#9ebcda", "#e0ecf4"))
+
+dev.off()
+```
+
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(RColorBrewer)
+
+piechart_data <- read_excel("~/Desktop/Review/Final figures/Figure 1/Figure 1a/Pie_charts.xlsx", sheet = "Chemo")
+head(piechart_data)
+
+# Compute the position of labels 
+piechart_data <- piechart_data %>% 
+                 arrange(desc(Group)) %>%
+                 mutate(prop = Value / sum(piechart_data$Value) *100) %>%
+                 mutate(ypos = cumsum(prop)- 0.5*prop)
+
+# Basic piechart
+ggplot(piechart_data, aes(x="", y=prop, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() + 
+  theme(legend.position="none") +
+  
+  geom_text(aes(y = ypos, label = Group), color = "black", size=4) +
+  scale_fill_manual(values =c("#e0f3db","#a8ddb5", "#43a2ca"))
+```
+
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 1/Figure 1a")
+
+pdf(file = "Figure 1a_Pie Chart_Chemo.pdf", width = 1.5, height = 1.5)
+
+ggplot(piechart_data, aes(x="", y=prop, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() + 
+  theme(legend.position="none") +
+  
+  geom_text(aes(y = ypos, label = Group), color = "black", size=1.8) +
+    scale_fill_manual(values =c("#e0f3db","#a8ddb5", "#43a2ca"))
+
+dev.off()
+```
+
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(RColorBrewer)
+
+piechart_data <- read_excel("~/Desktop/Review/Final figures/Figure 1/Figure 1a/Pie_charts.xlsx", sheet = "Number")
+head(piechart_data)
+
+# Compute the position of labels 
+piechart_data <- piechart_data %>% 
+                 arrange(desc(Group)) %>%
+                 mutate(prop = Value / sum(piechart_data$Value) *100) %>%
+                 mutate(ypos = cumsum(prop)- 0.5*prop)
+
+# Basic piechart
+ggplot(piechart_data, aes(x="", y=prop, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() + 
+  theme(legend.position="none") +
+  
+  geom_text(aes(y = ypos, label = Group), color = "black", size=4) +
+  scale_fill_manual(values =c("#fee8c8","#fdbb84", "#e34a33"))
+```
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 1/Figure 1a")
+
+pdf(file = "Figure 1a_Pie Chart_Number.pdf", width = 1.5, height = 1.5)
+
+ggplot(piechart_data, aes(x="", y=prop, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() + 
+  theme(legend.position="none") +
+  
+  geom_text(aes(y = ypos, label = Group), color = "black", size=1.8) +
+    scale_fill_manual(values =c("#fee8c8","#fdbb84", "#e34a33"))
+
+dev.off()
+```
+
+
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(RColorBrewer)
+
+piechart_data <- read_excel("~/Desktop/Review/Final figures/Figure 1/Figure 1a/Pie_charts.xlsx", sheet = "Timepoint")
+head(piechart_data)
+
+# Compute the position of labels 
+piechart_data <- piechart_data %>% 
+                 arrange(desc(Group)) %>%
+                 mutate(prop = Value / sum(piechart_data$Value) *100) %>%
+                 mutate(ypos = cumsum(prop)- 0.5*prop)
+
+# Basic piechart
+ggplot(piechart_data, aes(x="", y=prop, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() + 
+  theme(legend.position="none") +
+  
+  geom_text(aes(y = ypos, label = Group), color = "black", size=4) +
+  scale_fill_manual(values =c("#c51b8a", "#fde0dd", "#fa9fb5"))
+```
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 1/Figure 1a")
+
+pdf(file = "Figure 1a_Pie Chart_Biopsy.pdf", width = 1.5, height = 1.5)
+
+ggplot(piechart_data, aes(x="", y=prop, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() + 
+  theme(legend.position="none") +
+  
+  geom_text(aes(y = ypos, label = Group), color = "black", size=1.8) +
+    scale_fill_manual(values =c("#c51b8a", "#fde0dd", "#fa9fb5"))
+
+dev.off()
+```
+
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(RColorBrewer)
+
+piechart_data <- read_excel("~/Desktop/Review/Final figures/Figure 1/Figure 1a/Pie_charts.xlsx", sheet = "Sequential")
+head(piechart_data)
+
+# Compute the position of labels 
+piechart_data <- piechart_data %>% 
+                 arrange(desc(Group)) %>%
+                 mutate(prop = Value / sum(piechart_data$Value) *100) %>%
+                 mutate(ypos = cumsum(prop)- 0.5*prop)
+
+# Basic piechart
+ggplot(piechart_data, aes(x="", y=prop, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() + 
+  theme(legend.position="none") +
+  
+  geom_text(aes(y = ypos, label = Group), color = "black", size=4) +
+  scale_fill_manual(values =c("#74a9cf", "#f1eef6", "#bdc9e1", "#0570b0"))
+```
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 1/Figure 1a")
+
+pdf(file = "Figure 1a_Pie Chart_Sequential.pdf", width = 1.5, height = 1.5)
+
+ggplot(piechart_data, aes(x="", y=prop, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() + 
+  theme(legend.position="none") +
+  
+  geom_text(aes(y = ypos, label = Group), color = "black", size=1.8) +
+    scale_fill_manual(values =c("#74a9cf", "#f1eef6", "#bdc9e1", "#0570b0"))
+
+dev.off()
+```
+
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(RColorBrewer)
+
+piechart_data <- read_excel("~/Desktop/Review/Final figures/Figure 1/Figure 1a/Pie_charts.xlsx", sheet = "Site")
+head(piechart_data)
+
+# Compute the position of labels 
+piechart_data <- piechart_data %>% 
+                 arrange(desc(Group)) %>%
+                 mutate(prop = Value / sum(piechart_data$Value) *100) %>%
+                 mutate(ypos = cumsum(prop)- 0.5*prop)
+
+# Basic piechart
+ggplot(piechart_data, aes(x="", y=prop, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() + 
+  theme(legend.position="none") +
+  
+  geom_text(aes(y = ypos, label = Group), color = "black", size=4) +
+  scale_fill_manual(values =c("#238b45", "#b2e2e2", "#66c2a4", "#edf8fb"))
+```
+
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 1/Figure 1a")
+
+pdf(file = "Figure 1a_Pie Chart_Site.pdf", width = 1.5, height = 1.5)
+
+ggplot(piechart_data, aes(x="", y=prop, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() + 
+  theme(legend.position="none") +
+  
+  geom_text(aes(y = ypos, label = Group), color = "black", size=1.8) +
+    scale_fill_manual(values =c("#238b45", "#b2e2e2", "#66c2a4", "#edf8fb"))
+
+dev.off()
+```
+
+
+
+******************** Figure 1B ****************
+
+
+100 tumors, hierarchical clustering with complete linkage and Euclidean distance
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+library(RColorBrewer)
+
+# Open file (change the relative path accordingly)
+# Because of gene duplicates between the signatures, rename the duplicates 
+# The first column contains information about the gene signature (numeric value)
+Figure.1b <- read.delim("~/Desktop/Review/Final figures/Figure 1/Figure 1b/Figure 1b_100 biopsies.txt", row.names=1)
+head(Figure.1b)
+
+# Create an annotation file which contains the information that will be appear at the top
+# Order it based on sample name (from AZ)
+Annotation <- read.delim("~/Desktop/Review/Final figures/Figure 1/Figure 1b/Annotation_100 biopsies.txt", row.names=1)
+head(Annotation)
+
+# Create a matrix to generate the heatmap
+matrix <- as.matrix(Figure.1b)
+
+# Color coding for the top bar
+col_fun = list(NE_Status = c("Non NE" = "#31a354", "NE" = "#fb6a4a"),
+               NE_Score = circlize::colorRamp2(c(-0.4, 0, 0.2), c("#31a354", "white", "#fb6a4a")), 
+               Histology = c("SCLC" = "#ffff33", "EPSCC" = "#2b8cbe"),
+               Signature = c("50" = "#fdae6b", "10" = "#e6550d", "70"= "#fee6ce")
+               )
+
+# Annotation of the top bar
+ha <- HeatmapAnnotation(NE_Status = Annotation$Status,
+                        NE_Score = Annotation$Score, 
+                        Histology = Annotation$Histo, 
+                        annotation_name_gp = gpar(fontsize = 7),
+                        col = col_fun,
+                        name = "z-score log2(TMM_FPKM+1)"           
+                        )
+
+# Annotation of the side bar
+ra <- rowAnnotation(Signature = Figure.1b$Gene_signature,   
+                    annotation_name_gp = gpar(fontsize = 7),
+                    col = col_fun
+                    )
+
+# Create the heatmap
+Heatmap(matrix[,3:102], # eliminate the first column which contains the gene signature info
+        split = Figure.1b$Gene_signature, # To split the heatmap based on the 3 signatures
+        row_order = order(as.numeric(Figure.1b$Subtype)), # To order rows by gene sets within each signature
+        top_annotation = ha,
+        left_annotation = ra,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 3),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "z-score log2(TMM_FPKM+1)", 
+                                    direction = "horizontal", 
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+```
+
+
+
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 1/Figure 1b")
+
+pdf(file = "Figure 1b_100 biopsies_hierarchal clustering.pdf", width = 8, height = 10)
+
+Heatmap(matrix[,3:102], # eliminate the first column which contains the gene signature info
+        split = Figure.1b$Gene_signature, # To split the heatmap based on the 3 signatures
+        row_order = order(as.numeric(Figure.1b$Subtype)), # To order rows by gene sets within each signature
+        top_annotation = ha,
+        left_annotation = ra,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 3),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "z-score log2(TMM_FPKM+1)", 
+                                    direction = "horizontal", 
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+
+dev.off()
+```
+
+
+100 tumors, ordered by NE score (used for the manuscript)
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+library(RColorBrewer)
+
+# Open file (change the relative path accordingly)
+# Because of gene duplicates between the signatures, rename the duplicates 
+# The first column contains information about the gene signature (numeric value)
+Figure.1b <- read.delim("~/Desktop/Review/Final figures/Figure 1/Figure 1b/Figure 1b_100 biopsies.txt", row.names=1)
+head(Figure.1b)
+
+# Create an annotation file which contains the information that will be appear at the top
+# Order it based on sample name (from AZ)
+Annotation <- read.delim("~/Desktop/Review/Final figures/Figure 1/Figure 1b/Annotation_100 biopsies.txt", row.names=1)
+head(Annotation)
+
+# Create a matrix to generate the heatmap
+matrix <- as.matrix(Figure.1b)
+
+# Color coding for the top bar
+col_fun = list(NE_Status = c("Non NE" = "#31a354", "NE" = "#fb6a4a"),
+               NE_Score = circlize::colorRamp2(c(-0.4, 0, 0.2), c("#31a354", "white", "#fb6a4a")), 
+               Histology = c("SCLC" = "#ffff33", "EPSCC" = "#2b8cbe"),
+               Signature = c("50" = "#fdae6b", "10" = "#e6550d", "70"= "#fee6ce")
+               )
+
+# Annotation of the top bar
+ha <- HeatmapAnnotation(NE_Status = Annotation$Status,
+                        NE_Score = Annotation$Score, 
+                        Histology = Annotation$Histo, 
+                        annotation_name_gp = gpar(fontsize = 7),
+                        col = col_fun,
+                        name = "z-score log2(TMM_FPKM+1)"           
+                        )
+
+# Annotation of the side bar
+ra <- rowAnnotation(Signature = Figure.1b$Gene_signature, 
+                    annotation_name_gp = gpar(fontsize = 7),
+                    col = col_fun
+                    )
+
+# Create the heatmap
+Heatmap(matrix[,3:102], # eliminate the first column which contains the gene signature info
+        column_order = order(as.numeric(-Annotation$Score)), 
+        row_order = order(as.numeric(Figure.1b$Subtype)), 
+        split = Figure.1b$Gene_signature, # To split the heatmap based on the 3 signatures
+        top_annotation = ha,
+        left_annotation = ra,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 3),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "z-score log2(TMM_FPKM+1)", 
+                                    direction = "horizontal", 
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+
+```
+
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 1/Figure 1b")
+
+pdf(file = "Figure 1a_100 biopsies_NE ordering.pdf", width = 8, height = 8)
+
+Heatmap(matrix[,3:102], # eliminate the first column which contains the gene signature info
+        column_order = order(as.numeric(-Annotation$Score)), 
+        row_order = order(as.numeric(Figure.1b$Subtype)), 
+        split = Figure.1b$Gene_signature, # To split the heatmap based on the 3 signatures
+        top_annotation = ha,
+        left_annotation = ra,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 3),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "z-score log2(TMM_FPKM+1)", 
+                                    direction = "horizontal", 
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+
+dev.off()
+```
+
+
+72 patients, hierarchical clustering with complete linkage and Euclidean distance
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+library(RColorBrewer)
+
+# Open file (change the relative path accordingly)
+# Because of gene duplicates between the signatures, rename the duplicates 
+# The first column contains information about the gene signature (numeric value)
+Figure.1b <- read.delim("~/Desktop/Review/Final figures/Figure 1/Figure 1b/Figure 1b_72 patients.txt", row.names=1)
+head(Figure.1b)
+
+# Create an annotation file which contains the information that will be appear at the top
+# Order it based on sample name (from AZ)
+Annotation <- read.delim("~/Desktop/Review/Final figures/Figure 1/Figure 1b/Annotation_72 patients.txt", row.names=1)
+head(Annotation)
+
+# Create a matrix to generate the heatmap
+matrix <- as.matrix(Figure.1b)
+
+# Color coding for the top bar
+col_fun = list(NE_Status = c("Non NE" = "#31a354", "NE" = "#fb6a4a"),
+               NE_Score = circlize::colorRamp2(c(-0.4, 0, 0.2), c("#31a354", "white", "#fb6a4a")), 
+               Histology = c("SCLC" = "#ffff33", "EPSCC" = "#2b8cbe"),
+               Signature = c("50" = "#fdae6b", "10" = "#e6550d", "70"= "#fee6ce")
+               )
+
+# Annotation of the top bar
+ha <- HeatmapAnnotation(NE_Status = Annotation$Status,
+                        NE_Score = Annotation$Score, 
+                        Histology = Annotation$Histo, 
+                        annotation_name_gp = gpar(fontsize = 7),
+                        col = col_fun,
+                        name = "z-score log2(TMM_FPKM+1)"           
+                        )
+
+# Annotation of the side bar
+ra <- rowAnnotation(Signature = Figure.1b$Gene_signature,   
+                    annotation_name_gp = gpar(fontsize = 7),
+                    col = col_fun
+                    )
+
+# Create the heatmap
+Heatmap(matrix[,2:73], # eliminate the first column which contains the gene signature info
+        split = Figure.1b$Gene_signature, # To split the heatmap based on the 3 signatures
+        top_annotation = ha,
+        left_annotation = ra,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 3),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "z-score log2(TMM_FPKM+1)", 
+                                    direction = "horizontal", 
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+```
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 1/Figure 1b")
+
+pdf(file = "Figure 1b_72 patients_hierarchal clustering.pdf", width = 8, height = 8)
+
+Heatmap(matrix[,2:73], # eliminate the first column which contains the gene signature info
+        split = Figure.1b$Gene_signature, # To split the heatmap based on the 3 signatures
+        top_annotation = ha,
+        left_annotation = ra,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 3),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "z-score log2(TMM_FPKM+1)", 
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+
+dev.off()
+```
+
+
+72 patients, ordered by NE score
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+library(RColorBrewer)
+
+# Open file (change the relative path accordingly)
+# Because of gene duplicates between the signatures, rename the duplicates 
+# The first column contains information about the gene signature (numeric value)
+Figure.1b <- read.delim("~/Desktop/Review/Final figures/Figure 1/Figure 1b/Figure 1b_72 patients.txt", row.names=1)
+head(Figure.1b)
+
+# Create an annotation file which contains the information that will be appear at the top
+# Order it based on sample name (from AZ)
+Annotation <- read.delim("~/Desktop/Review/Final figures/Figure 1/Figure 1b/Annotation_72 patients.txt", row.names=1)
+head(Annotation)
+
+# Create a matrix to generate the heatmap
+matrix <- as.matrix(Figure.1b)
+
+# Color coding for the top bar
+col_fun = list(NE_Status = c("Non NE" = "#31a354", "NE" = "#fb6a4a"),
+               NE_Score = circlize::colorRamp2(c(-0.4, 0, 0.2), c("#31a354", "white", "#fb6a4a")), 
+               Histology = c("SCLC" = "#ffff33", "EPSCC" = "#2b8cbe"),
+               Signature = c("50" = "#fdae6b", "10" = "#e6550d", "70"= "#fee6ce")
+               )
+
+# Annotation of the top bar
+ha <- HeatmapAnnotation(NE_Status = Annotation$Status,
+                        NE_Score = Annotation$Score, 
+                        Histology = Annotation$Histo, 
+                        annotation_name_gp = gpar(fontsize = 7),
+                        col = col_fun,
+                        name = "z-score log2(TMM_FPKM+1)"           
+                        )
+
+# Annotation of the side bar
+ra <- rowAnnotation(Signature = Figure.1b$Gene_signature,   
+                    annotation_name_gp = gpar(fontsize = 7),
+                    col = col_fun
+                    )
+
+# Create the heatmap
+Heatmap(matrix[,2:73], # eliminate the first column which contains the gene signature info
+        column_order = order(as.numeric(-Annotation$Score)), 
+        split = Figure.1b$Gene_signature, # To split the heatmap based on the 3 signatures
+        top_annotation = ha,
+        left_annotation = ra,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 3),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "z-score log2(TMM_FPKM+1)", 
+                                    direction = "horizontal", 
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+
+```
+
+
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 1/Figure 1b")
+
+pdf(file = "Figure 1b_72 patients_NE ordering.pdf", width = 8, height = 8)
+
+Heatmap(matrix[,2:73], # eliminate the first column which contains the gene signature info
+        column_order = order(as.numeric(Annotation$Score)), 
+        split = Figure.1b$Gene_signature, # To split the heatmap based on the 3 signatures
+        top_annotation = ha,
+        left_annotation = ra,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 3),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "z-score log2(TMM_FPKM+1)", 
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+
+dev.off()
+```
+
+
+******************** Figure 1C ****************
+
+All 100 biopsies
+```{r}
+library(lattice)
+
+# Open file
+Figure.1c <- read.delim("~/Desktop/Review/Final figures/Figure 1/Figure 1c/Figure 1c_100 biopsies.txt", row.names=1)
+head(Figure.1c)
+
+NE50vsNE10 <- cor.test(Figure.1c$NE50, Figure.1c$NE10, method = "pearson")
+NE50vsNE10
+NE50vsNE70 <- cor.test(Figure.1c$NE50, Figure.1c$NE70, method = "pearson")
+NE50vsNE70
+NE10vsNE70 <- cor.test(Figure.1c$NE10, Figure.1c$NE70, method = "pearson")
+NE10vsNE70
+
+# Create the function
+upper.panel<-function(x, y){
+    points(x,y)
+    r <- round(cor(x, y), digits=2)
+    txt <- paste0("R = ", r)
+    usr <- par("usr"); on.exit(par(usr))
+    par(usr = c(0, 1, 0, 1))
+    text(0.15, 0.9, txt)
+    }
+
+# Make the graph
+plot(Figure.1c[1:3], upper.panel = upper.panel, lower.panel = NULL)
+```
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 1/Figure 1c")
+
+pdf(file = "Figure 1c_Pearson Correlation_100 biopsies.pdf", width = 6, height = 6)
+
+plot(Figure.1c[1:3], upper.panel = upper.panel, lower.panel = NULL)
+
+dev.off()
+```
+
+
+
+
+72 patients
+```{r}
+library(lattice)
+
+# Open file
+Figure.1c <- read.delim("~/Desktop/Review/Final figures/Figure 1/Figure 1c/Figure 1c_72 patients.txt", row.names=1)
+head(Figure.1c)
+
+NE50vsNE10 <- cor.test(Figure.1c$NE50, Figure.1c$NE10, method = "pearson")
+NE50vsNE10
+NE50vsNE70 <- cor.test(Figure.1c$NE50, Figure.1c$NE70, method = "pearson")
+NE50vsNE70
+NE10vsNE70 <- cor.test(Figure.1c$NE10, Figure.1c$NE70, method = "pearson")
+NE10vsNE70
+
+# Create the function
+upper.panel<-function(x, y){
+    points(x,y)
+    r <- round(cor(x, y), digits=2)
+    txt <- paste0("R = ", r)
+    usr <- par("usr"); on.exit(par(usr))
+    par(usr = c(0, 1, 0, 1))
+    text(0.15, 0.9, txt)
+    }
+
+# Make the graph
+plot(Figure.1c[1:3], upper.panel = upper.panel, lower.panel = NULL)
+```
+
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 1/Figure 1c")
+
+pdf(file = "Figure 1c_Pearson Correlation_72 patients.pdf", width = 6, height = 6)
+
+plot(Figure.1c[1:3], upper.panel = upper.panel, lower.panel = NULL)
+
+dev.off()
+```
+
+
+
+******************** Figure 1D*********************
+
+Barplot
+```{r}
+library(ggplot2)
+library(RColorBrewer)
+
+
+# Open file (change the relative path accordingly)
+Figure.1d <- read.delim("~/Desktop/Review/Final figures/Figure 1/Figure 1d/Figure 1d.txt", row.names=1)
+head(Figure.1d)
+
+# Calculate the percentage
+data_percentage <- apply(Figure.1d, 2, function(x){x*100/sum(x,na.rm=T)})
+
+# Create the color
+color <- c("High NE" = "#fcbba1", "Non-NE" = "#c7e9c0")
+
+# Create the barplot
+barplot(data_percentage, col=color , border="white", xlab="Patients", ylab="Relative Percent", cex.names= 0.2, cex.lab=1, cex.axis=0.7)
+```
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 1/Figure 1d")
+
+pdf(file = "Figure 1d_BarPlot Cybersort.pdf", width = 8, height = 4)
+
+barplot(data_percentage, col=color , border="white", xlab="Patients", ylab="Relative Percent", cex.names= 0.2, cex.lab=0.8, cex.axis=0.7)
+
+dev.off()
+```
+
+
+Bar plot summary
+```{r}
+library(ggplot2)
+library(plyr)
+library(RColorBrewer)
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+# Calculate the percentage before up-loading the data
+Figure.1d_2 <- read.delim("~/Desktop/Review/Final figures/Figure 1/Figure 1d/Figure 1d_2.txt", row.names = 1)
+head(Figure.1d_2)
+
+# Calculate average and SEM for each group
+melted <- melt(Figure.1d_2, id.vars="Subtype")
+means_SEM <- ddply(melted, c("variable", "Subtype"), summarise, 
+                  mean=mean(value), 
+                  sem=sd(value)/sqrt(length(value))
+                  )
+
+# Compute y position before plotting
+# Important for the error bars to be aligned
+means_SEM$y_pos[means_SEM$variable=='NE'] = means_SEM$mean[means_SEM$variable=='NE'] 
+means_SEM$y_pos[means_SEM$variable=='Non-NE'] = means_SEM$mean[means_SEM$variable=='Non-NE'] + means_SEM$mean[means_SEM$variable=='NE']
+
+#Draw bar plot 
+# To fill in the opposite order, replace 'fill=forcats::fct_rev(variable)' by 'fill=variable'
+ggplot(means_SEM, aes(x=Subtype, y=mean, fill=forcats::fct_rev(variable))) + 
+       geom_bar(stat="identity", width = 0.4) +    
+       xlab(" ") + ylab("Relative Percent") +
+       theme_classic(base_size = 16) + 
+       theme(axis.title.y=element_text(size=16)) + 
+       theme(axis.text.y=element_text(size=16, colour = "black")) +
+       theme(axis.text.x=element_text(size=16, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       geom_errorbar(data=means_SEM, aes(ymax=y_pos + sem,  ymin=y_pos - sem), width=0.1) +  # to generate the error bars
+       scale_fill_manual(values=c("#c7e9c0", "#fcbba1")) 
+```
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 1/Figure 1d")
+
+pdf(file = "Figure 1d_Summary Cybersort.pdf", width = 3.5, height = 2.5)
+
+ggplot(means_SEM, aes(x=Subtype, y=mean, fill=forcats::fct_rev(variable))) + 
+       geom_bar(stat="identity", width = 0.6) +    
+       xlab(" ") + ylab("Relative Percent") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10, colour = "black")) +
+       theme(axis.text.x=element_text(size=10, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       geom_errorbar(data=means_SEM, aes(ymax=y_pos + sem,  ymin=y_pos - sem), width=0.1) +  # to generate the error bars
+       scale_fill_manual(values=c("#c7e9c0", "#fcbba1"))
+
+dev.off()
+```
+
+
+
+
+******************** Figure 2B *******************
+
+```{r}
+# Open file (change the relative path accordingly)
+Figure.2b <- read.delim("~/Desktop/Review/Final figures/Figure 2/Figure 2b/Figure 2b.txt", row.names=1)
+head(Figure.2b)
+
+
+library("ggpubr")
+
+ggscatter(Figure.2b, x = "mRNA", y = "Hscore", 
+          add = "reg.line", conf.int = TRUE, 
+          add.params = list(fill = "lightgray"),
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "INSM1 mRNA expression", ylab = "INSM1 H-score", 
+          size = 1) 
+```
+
+
+```{r}
+setwd("~/Desktop/Review/Final figures/Figure 2/Figure 2b")
+
+pdf(file = "Figure.2b.pdf", width = 3.7, height = 2.8)
+
+ggscatter(Figure.2b, x = "mRNA", y = "Hscore", 
+          add = "reg.line", conf.int = TRUE, 
+          add.params = list(fill = "lightgray"),
+          cor.coef = FALSE, cor.method = "spearman",
+          xlab = "INSM1 mRNA expression", ylab = "INSM1 H-score", 
+          size = 1)  
+
+dev.off()
+```
+
+
+******************** Figure 2C *******************
+
+```{r}
+# Open file (change the relative path accordingly)
+Figure.2c <- read.delim("~/Desktop/Review/Final figures/Figure 2/Figure 2c/Figure 2c.txt", row.names=1)
+head(Figure.2c)
+
+
+library("ggpubr")
+
+ggscatter(Figure.2c, x = "NE50", y = "Hscore", 
+          add = "reg.line", conf.int = TRUE, 
+          add.params = list(fill = "lightgray"),
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "NE Score", ylab = "INSM1 H-score", 
+          size = 1) 
+```
+```{r}
+setwd("~/Desktop/Review/Final figures/Figure 2/Figure 2c")
+
+pdf(file = "Figure.2c.pdf", width = 3.7, height = 2.8)
+
+ggscatter(Figure.2c, x = "NE50", y = "Hscore", 
+          add = "reg.line", conf.int = TRUE, 
+          add.params = list(fill = "lightgray"),
+          cor.coef = FALSE, cor.method = "spearman",
+          xlab = "NE Score", ylab = "INSM1 H-score", 
+          size = 1) 
+
+dev.off()
+```
+
+
+******************** Figure 2D *********************
+
+Boxplot
+```{r}
+library(reshape2)
+library(ggplot2)
+
+# Open file (change the relative path accordingly)
+Figure.2d <- read.delim("~/Desktop/Review/Final figures/Figure 2/Figure 2d/Figure 2d.txt", row.names=1)
+head(Figure.2d)
+
+# Melt data
+melted <- melt(Figure.2d, id.vars="Subtype")
+
+# Order Subtype
+melted$variable <- factor(melted$variable, levels = c("ASCL1", "NEUROD1", "YAP1", "POU2F3"))
+
+# Create the boxplot
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("Log2(FPKM+1)") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+```
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 2/Figure 2d")
+
+pdf(file = "Figure 2d.pdf", width = 6, height = 3)
+
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("Log2(FPKM+1)") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+
+dev.off()
+```
+
+
+
+******************** Figure 2E *********************
+
+
+Heatmap using log2(FPKM+1) 
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+library(RColorBrewer)
+
+# Open file (change the relative path accordingly)
+Figure.2e <- read.delim("~/Desktop/Review/Final figures/Figure 2/Figure 2e/Figure2e_log2_72 patients.txt", row.names=1)
+head(Figure.2e)
+
+# Create an annotation file which contains the information that will be appear at the top
+Annotation <- read.delim("~/Desktop/Review/Final figures/Figure 2/Figure 2e/Annotation_72 patients.txt", row.names=1)
+head(Annotation)
+
+# Create a matrix to generate the heatmap
+matrix <- as.matrix(Figure.2e)
+
+# Color coding for the top bar
+col_fun = list(NE_Status = c("Non NE" = "#31a354", "NE" = "#fb6a4a"),
+               NE_Score = circlize::colorRamp2(c(-0.4, 0, 0.2), c("#31a354", "white", "#fb6a4a")), 
+               Subtypes = c("SCNC-A" = "#fc8d59", "SCNC-N" = "#e6f598", "SCNC-Y" = "#74add1", "SCNC-P" = "#67001f"), 
+               Histology = c("SCLC" = "#ffff33", "EPSCC" = "#2b8cbe")
+               )
+
+# Annotation of the top bar
+ha <- HeatmapAnnotation(NE_Status = Annotation$Status,
+                        NE_Score = Annotation$Score, 
+                        Subtypes = Annotation$NAPY, 
+                        Histology = Annotation$Histo,
+                        annotation_name_gp = gpar(fontsize = 7),
+                        col = col_fun,
+                        name = "z-score log2(TMM_FPKM+1)"           
+                        )
+# Create the heatmap
+Heatmap(matrix, 
+        top_annotation = ha,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 7),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "log2(TMM_FPKM+1)", 
+                                    direction = "horizontal", 
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+```
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 2/Figure 2e")
+
+pdf(file = "Figure 2e_72 patients_log2(FPKM +1).pdf",  width = 10.5, height = 4)
+
+Heatmap(matrix, 
+        top_annotation = ha,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 7),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "log2(TMM_FPKM+1)",                                     
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+
+dev.off()
+```
+
+******************** Figure 2F *******************
+
+
+PCA Molecular Subtypes for 72 patients
+```{r}
+# Open libraries
+library("ggfortify")
+library("ggplot2")
+
+# Open file (change the relative path accordingly)
+Figure.2f <- read.delim("~/Desktop/Review/Final figures/Figure 2/Figure 2f/Figure 2f_72 patients.txt", row.names=1)
+head(Figure.2f)
+
+# Generate the PCA
+pca_res <- prcomp(Figure.2f[2:5], scale = TRUE)
+summary(pca_res)
+
+
+# Plot PCA
+autoplot(pca_res, data = Figure.2f, colour = 'Subtype',
+         loadings = FALSE, 
+         scale = FALSE,
+         size = 5) + theme_classic() + scale_colour_manual(values=c("SCNC-A" = "#fc8d59", "SCNC-N" = "#e6f598", "SCNC-Y" = "#74add1",   "SCNC-P" = "#67001f"))
+```
+
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 2/Figure 2f")
+
+pdf(file = "Figure 2f_PCA_72 patients.pdf", width = 6, height = 3)
+
+autoplot(pca_res, data = Figure.2f, colour = 'Subtype',
+         loadings = FALSE, 
+         scale = FALSE,
+         size = 5) + theme_classic() + scale_colour_manual(values=c("SCNC-A" = "#fc8d59", "SCNC-N" = "#e6f598", "SCNC-Y" = "#74add1",   "SCNC-P" = "#67001f"))
+
+dev.off()
+```
+
+
+********************* Figure 3A ******************
+
+```{r}
+library("ggplot2")
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+Figure.3a <- read.delim("~/Desktop/Review/Final figures/Figure 3/Figure 3a.b/Figure 3a.txt", row.names=1)
+head(Figure.3a)
+
+# Melt data
+melted <- melt(Figure.3a, id.vars="Subtype")
+
+# Order Subtype
+melted$variable <- factor(melted$variable, levels = c("MYC", "MYCL", "MYCN"))
+
+# Create the boxplot
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("Log2(FPKM+1)") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+
+```
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 3/Figure 3a.b")
+
+pdf(file = "Figure 3a.pdf", width = 4.5, height = 2.7)
+
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("Log2(FPKM+1)") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+
+dev.off()
+```
+
+
+
+********************* Figure 3B ******************
+
+```{r}
+library("ggplot2")
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+Figure.3b <- read.delim("~/Desktop/Review/Final figures/Figure 3/Figure 3a.b/Figure 3b.txt", row.names=1)
+head(Figure.3b)
+
+# Melt data
+melted <- melt(Figure.3b, id.vars="Subtype")
+
+# Order Subtype
+melted$variable <- factor(melted$variable, levels = c("MYC", "MYCL", "MYCN"))
+melted$Subtype <- factor(melted$Subtype, levels = c("SCNC-A", "SCNC-N", "SCNC-Y", "SCNC-P"))
+
+# Create the boxplot
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("Log2(FPKM+1)") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("SCNC-A" = "#fc8d59", "SCNC-N" = "#e6f598", "SCNC-Y" = "#74add1", "SCNC-P" = "#67001f")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+```
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 3/Figure 3a.b")
+
+pdf(file = "Figure 3b.pdf", width = 6, height = 2.7)
+
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("Log2(FPKM+1)") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("SCNC-A" = "#fc8d59", "SCNC-N" = "#e6f598", "SCNC-Y" = "#74add1", "SCNC-P" = "#67001f")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+
+dev.off()
+```
+
+
+
+******************** Figure 3C *******************
+
+```{r}
+library(ggplot2)
+library(RColorBrewer)
+
+
+# Open file (change the relative path accordingly)
+Figure.3c <- read.delim("~/Desktop/Review/Final figures/Figure 3/Figure 3c/Figure 3c.txt", row.names=1)
+head(Figure.3c)
+
+# Calculate the percentage
+data_percentage <- apply(Figure.3c, 2, function(x){x*100/sum(x,na.rm=T)})
+
+# Create the color
+color <- c("#f6e8c3", "#d8b365", "#8c510a")
+
+# Create the barplot
+barplot(data_percentage, col=color , border="white", xlab="Patients", ylab="Relative Percent", cex.names= 0.2, cex.lab=1, cex.axis=0.7)
+```
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 3/Figure 3c")
+
+pdf(file = "Figure 3c_BarPlot Cybersort.pdf", width = 7, height = 4)
+
+barplot(data_percentage, col=color , border="white", xlab="Patients", ylab="Relative Percent", cex.names= 0.2, cex.lab=1, cex.axis=0.7)
+
+dev.off()
+```
+
+
+******************** Figure 3D *******************
+
+Summary Barplot
+```{r}
+library(ggplot2)
+library(plyr)
+library(RColorBrewer)
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+# Calculate the percentage before up-loading the data
+Figure.3d <- read.delim("~/Desktop/Review/Final figures/Figure 3/Figure 3d/Figure 3d.txt", row.names = 1)
+head(Figure.3d)
+
+# Calculate average and SEM for each group
+melted <- melt(Figure.3d, id.vars="Subtype")
+means_SEM <- ddply(melted, c("variable", "Subtype"), summarise, 
+                   mean=mean(value), 
+                   sem=sd(value)/sqrt(length(value))
+                   )
+
+# Compute y position before plotting
+# Important for the error bars to be aligned
+means_SEM$y_pos[means_SEM$variable=='EarlyTumor'] = means_SEM$mean[means_SEM$variable=='EarlyTumor'] 
+means_SEM$y_pos[means_SEM$variable=='MidlateTumor'] = means_SEM$mean[means_SEM$variable=='EarlyTumor'] + means_SEM$mean[means_SEM$variable=='MidlateTumor']
+means_SEM$y_pos[means_SEM$variable=='LateTumor'] = + means_SEM$mean[means_SEM$variable=='EarlyTumor']+ means_SEM$mean[means_SEM$variable=='MidlateTumor'] + means_SEM$mean[means_SEM$variable=='LateTumor']
+
+
+# Order Subtype
+means_SEM$Subtype <- factor(means_SEM$Subtype, levels = c("SCNC-A", "SCNC-N", "SCNC-Y", "SCNC-P"))
+
+# Draw bar plot 
+# To fill in the opposite order, replace 'fill=forcats::fct_rev(variable)' by 'fill=variable'
+ggplot(means_SEM, aes(x=Subtype, y=mean, fill=forcats::fct_rev(variable))) + 
+       geom_bar(stat="identity", width = 0.6) +    
+       xlab(" ") + 
+       scale_y_continuous(name="Relative Percent", limits=c(0, 120)) +
+       theme_classic(base_size = 12) + 
+       theme(axis.title.y=element_text(size=12)) + 
+       theme(axis.text.y=element_text(size=12, colour = "black")) +
+       theme(axis.text.x=element_text(size=12, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       geom_errorbar(data=means_SEM, aes(ymax=y_pos + sem,  ymin=y_pos - sem), width=0.1) +  # to generate the error bars
+       scale_fill_manual(values=c ("#8c510a", "#d8b365", "#f6e8c3")) 
+```
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 3/Figure 3d")
+
+pdf(file = "Figure 3d_Summary Cibersort.pdf", width = 4, height = 3)
+
+ggplot(means_SEM, aes(x=Subtype, y=mean, fill=forcats::fct_rev(variable))) + 
+       geom_bar(stat="identity", width = 0.6) +    
+       xlab(" ") + 
+       scale_y_continuous(name="Relative Percent", limits=c(0, 120)) +
+       theme_classic(base_size=12) + 
+       theme(axis.title.y=element_text(size=12)) + 
+       theme(axis.text.y=element_text(size=7, colour = "black")) +
+       theme(axis.text.x=element_text(size=7, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       geom_errorbar(data=means_SEM, aes(ymax=y_pos + sem,  ymin=y_pos - sem), width=0.1) +  # to generate the error bars
+       scale_fill_manual(values=c ("#8c510a", "#d8b365", "#f6e8c3"))
+
+
+dev.off()
+```
+
+
+Summary Barplot (used for the manuscript)
+```{r}
+library("ggplot2")
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+Figure.3d <- read.delim("~/Desktop/Review/Final figures/Figure 3/Figure 3d/Figure 3d.txt", row.names = 1)
+head(Figure.3d)
+
+# Melt data
+melted <- melt(Figure.3d, id.vars="Subtype")
+
+# Order Subtype
+melted$Subtype <- factor(melted$Subtype, levels = c("SCNC-A", "SCNC-N", "SCNC-Y", "SCNC-P"))
+
+# Create the boxplot
+ggplot(melted, aes(x=Subtype, y=value, fill=variable)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("Relative Percent") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#f6e8c3", "#d8b365","#8c510a")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+```
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 3/Figure 3d")
+
+pdf(file = "Figure 3d_Summary Cibersort_2.pdf", width = 5, height = 2.7) 
+
+ggplot(melted, aes(x=Subtype, y=value, fill=variable)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("Relative Percent") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#f6e8c3", "#d8b365","#8c510a")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+
+dev.off()
+```
+
+
+
+********************* Figure 3E ******************
+
+```{r}
+library("ggplot2")
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+Figure.3e <- read.delim("~/Desktop/Review/Final figures/Figure 3/Figure 3e.f/Figure 3e.txt", row.names=1)
+head(Figure.3e)
+
+# Melt data
+melted <- melt(Figure.3e, id.vars="Subtype")
+
+# Order Subtype
+melted$variable <- factor(melted$variable, levels = c("NOTCH2","NOTCH1","NOTCH3", "REST", "DLL1", "DLL3"))
+
+
+# Create the boxplot
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("Log2(FPKM+1)") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+```
+
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 3/Figure 3e.f")
+
+pdf(file = "Figure 3e.pdf", width = 6, height = 2.7)
+
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("Log2(FPKM+1)") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+
+dev.off()
+```
+
+********************* Figure 3F ******************
+
+```{r}
+library("ggplot2")
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+Figure.3f <- read.delim("~/Desktop/Review/Final figures/Figure 3/Figure 3e.f/Figure 3f.txt", row.names=1)
+head(Figure.3f)
+
+# Melt data
+melted <- melt(Figure.3f, id.vars="Subtype")
+
+# Order Subtype
+melted$variable <- factor(melted$variable, levels = c("NOTCH2","NOTCH1","NOTCH3", "REST", "DLL1", "DLL3"))
+melted$Subtype <- factor(melted$Subtype, levels = c("SCNC-A", "SCNC-N", "SCNC-Y", "SCNC-P"))
+
+# Create the boxplot
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("Log2(FPKM+1)") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("SCNC-A" = "#fc8d59", "SCNC-N" = "#e6f598", "SCNC-Y" = "#74add1", "SCNC-P" = "#67001f")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+```
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 3/Figure 3e.f")
+
+pdf(file = "Figure 3f.pdf", width = 6, height = 2.7)
+
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("Log2(FPKM+1)") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("SCNC-A" = "#fc8d59", "SCNC-N" = "#e6f598", "SCNC-Y" = "#74add1", "SCNC-P" = "#67001f")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+
+dev.off()
+```
+
+
+
+******************** Figure 3G *******************
+
+```{r}
+# Open file (change the relative path accordingly)
+Figure.3g <- read.delim("~/Desktop/Review/Final figures/Figure 3/Figure 3g/Figure 3g.txt", row.names=1)
+head(Figure.3g)
+
+
+library("ggpubr")
+
+ggscatter(Figure.3g, x = "NE50", y = "EMTAnastassiou", 
+          add = "reg.line", conf.int = TRUE, 
+          add.params = list(fill = "lightgray"),
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "NE Score", ylab = "EMT ssGSEA Score", 
+          size = 1) 
+```
+
+
+```{r}
+setwd("~/Desktop/Review/Final figures/Figure 3/Figure 3g")
+
+pdf(file = "Figure.3g.pdf", width = 4, height = 2.8)
+
+ggscatter(Figure.3g, x = "NE50", y = "EMTAnastassiou", 
+          add = "reg.line", conf.int = TRUE, 
+          add.params = list(fill = "lightgray"),
+          cor.coef = FALSE, cor.method = "pearson",
+          xlab = "NE Score", ylab = "EMT ssGSEA Score0", 
+          size = 1) 
+
+dev.off()
+```
+
+
+******************** Figure 3H *******************
+
+
+```{r}
+# Open libraries
+library("ggfortify")
+library("ggplot2")
+
+# Open file (change the relative path accordingly)
+Figure.3h <- read.delim("~/Desktop/Review/Final figures/Figure 3/Figure 3h/Figure 3h.txt", row.names=1)
+head(Figure.3h)
+
+# Generate the PCA
+pca_res <- prcomp(Figure.3h[4:20], scale = TRUE)
+summary(pca_res)
+
+
+# Plot PCA
+autoplot(pca_res, data = Figure.3h, colour = 'Subtype',
+         loadings = TRUE, loadings.colour = 'yellow',loadings.label = TRUE, loadings.label.size = 2.5, loadings.label.colour ="black",
+         scale = FALSE,
+         size = 5) + theme_classic() + scale_colour_manual(values=c("SCNC-A" = "#fc8d59", "SCNC-N" = "#e6f598", "SCNC-Y" = "#74add1",   "SCNC-P" = "#67001f"))
+```
+
+```{r}
+setwd("~/Desktop/Review/Final figures/Figure 3/Figure 3h")
+
+pdf(file = "Figure 3h.pdf", width = 5, height = 2.7)
+
+autoplot(pca_res, data = Figure.3h, colour = 'Subtype',
+         loadings = TRUE, loadings.colour = 'yellow',loadings.label = TRUE, loadings.label.size = 2.5, loadings.label.colour ="black",
+         scale = FALSE,
+         size = 5) + theme_classic() + scale_colour_manual(values=c("SCNC-A" = "#fc8d59", "SCNC-N" = "#e6f598", "SCNC-Y" = "#74add1",   "SCNC-P" = "#67001f"))
+
+dev.off()
+```
+
+
+******************** Figure 4A *******************
+
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+library(RColorBrewer)
+
+# Open file (change the relative path accordingly)
+# Because of gene duplicates between the signatures, rename the duplicates 
+# The first column contains information about the gene signature (numeric value)
+Figure.4a <- read.delim("~/Desktop/Review/Final figures/Figure 4/Figure 4a/Heatmap_100 biopsies.txt", row.names=1)
+head(Figure.4a)
+
+# Create an annotation file which contains the information that will be appear at the top
+# Order it based on sample name (from AZ)
+Annotation <- read.delim("~/Desktop/Review/Final figures/Figure 4/Figure 4a/Annotation_100 biopsies.txt", row.names=1)
+head(Annotation)
+
+# Create a matrix to generate the heatmap
+matrix <- as.matrix(Figure.4a)
+
+# Color coding for the top bar
+col_fun = list(NE_Status = c("Non NE" = "#31a354", "NE" = "#fb6a4a"),
+               NE_Score = circlize::colorRamp2(c(-0.4, 0, 0.2), c("#31a354", "white", "#fb6a4a")), 
+               Pathways = c("1" = "#fdae6b", "2" = "#e6550d")
+               )
+
+# Annotation of the top bar
+ha <- HeatmapAnnotation(NE_Status = Annotation$Status,
+                        NE_Score = Annotation$Score, 
+                        annotation_name_gp = gpar(fontsize = 7),
+                        col = col_fun,
+                        name = "z-score log2(TMM_FPKM+1)"           
+                        )
+
+# Annotation of the side bar
+ra <- rowAnnotation(Pathways = Figure.4a$Pathway,   
+                    annotation_name_gp = gpar(fontsize = 7),
+                    col = col_fun
+                    )
+
+# Create the heatmap
+Heatmap(matrix[,2:101], # eliminate the first column which contains the gene signature info
+        column_order = order(as.numeric(-Annotation$Score)), 
+        split = Figure.4a$Pathway, # To split the heatmap based on the 3 signatures
+        top_annotation = ha,
+        left_annotation = ra,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 3),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "z-score log2(TMM_FPKM+1)", 
+                                    direction = "horizontal", 
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+```
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 4/Figure 4a")
+
+pdf(file = "Figure 4a.pdf", width = 7.5, height = 6)
+
+Heatmap(matrix[,2:101], # eliminate the first column which contains the gene signature info
+        column_order = order(as.numeric(-Annotation$Score)), 
+        split = Figure.4a$Pathway, # To split the heatmap based on the 3 signatures
+        top_annotation = ha,
+        left_annotation = ra,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 4),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "z-score log2(TMM_FPKM+1)", 
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+
+dev.off()
+```
+
+
+******************** Figure 4B *******************
+
+```{r}
+# Open file (change the relative path accordingly)
+Figure.4b <- read.delim("~/Desktop/Review/Final figures/Figure 4/Figure 4b/Figure 4b.txt", row.names=1)
+head(Figure.4b)
+
+
+library("ggpubr")
+
+ggscatter(Figure.4b, x = "NE_SCORE", y = "CCS_ssGSEA", 
+          add = "reg.line", conf.int = TRUE, 
+          add.params = list(fill = "lightgray"),
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "NE Score", ylab = "CCS ssGSEA Score", 
+          size = 1) 
+```
+
+
+```{r}
+setwd("~/Desktop/Review/Final figures/Figure 4/Figure 4b")
+
+pdf(file = "CSS signature.pdf", width = 3.5, height = 2.6)
+
+ggscatter(Figure.4b, x = "NE_SCORE", y = "CCS_ssGSEA", 
+          add = "reg.line", conf.int = TRUE, 
+          add.params = list(fill = "lightgray"),
+          cor.coef = FALSE, cor.method = "pearson",
+          xlab = "NE Score", ylab = "CCS ssGSEA Score", 
+          size = 1) 
+
+dev.off()
+```
+
+
+
+******************** Figure 4B_2 *******************
+
+```{r}
+library("ggplot2")
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+Figure.4b_2 <- read.delim("~/Desktop/Review/Final figures/Figure 4/Figure 4b/Figure 4b_2.txt", row.names=1)
+head(Figure.4b_2)
+
+# Melt data
+melted <- melt(Figure.4b_2, id.vars="Subtype")
+
+# Order Subtype
+melted$variable <- factor(melted$variable, levels = c("CCS_ssGSEA"))
+
+# Create the boxplot
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("CCS ssGSEA Score") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+```
+
+
+```{r}
+setwd("~/Desktop/Review/Final figures/Figure 4/Figure 4b")
+
+pdf(file = "CCS.pdf", width = 3, height = 2.5)
+
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("CCS ssGSEA Score") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+
+dev.off()
+```
+
+
+
+************************ Figure 4C *******************************
+
+```{r}
+# Open file (change the relative path accordingly)
+Figure.4c <- read.delim("~/Desktop/Review/Final figures/Figure 4/Figure 4c/Figure 4c.txt", row.names=1)
+head(Figure.4c)
+
+
+library("ggpubr")
+
+ggscatter(Figure.4c, x = "NE_score", y = "APM_ssGSEA", 
+          add = "reg.line", conf.int = TRUE, 
+          add.params = list(fill = "lightgray"),
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "NE Score", ylab = "APM ssGSEA Score", 
+          size = 1) 
+```
+
+
+```{r}
+setwd("~/Desktop/Review/Final figures/Figure 4/Figure 4c")
+
+pdf(file = "APM signature.pdf", width = 3.5, height = 2.6)
+
+ggscatter(Figure.4c, x = "NE_score", y = "APM_ssGSEA", 
+          add = "reg.line", conf.int = TRUE, 
+          add.params = list(fill = "lightgray"),
+          cor.coef = FALSE, cor.method = "pearson",
+          xlab = "NE Score", ylab = "APM ssGSEA Score", 
+          size = 1) 
+
+dev.off()
+```
+
+******************** Figure 4C_2 *******************
+
+```{r}
+library("ggplot2")
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+Figure.4c_2 <- read.delim("~/Desktop/Review/Final figures/Figure 4/Figure 4c/Figure 4c_2.txt", row.names=1)
+head(Figure.4c_2)
+
+# Melt data
+melted <- melt(Figure.4c_2, id.vars="Subtype")
+
+# Order Subtype
+melted$variable <- factor(melted$variable, levels = c("APM_ssGSEA"))
+
+# Create the boxplot
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("APM ssGSEA Score") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+```
+
+
+```{r}
+setwd("~/Desktop/Review/Final figures/Figure 4/Figure 4c")
+
+pdf(file = "AMP.pdf", width = 3, height = 2.5)
+
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("APM ssGSEA Score") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+
+dev.off()
+```
+
+
+******************** Figure 4D *******************
+
+All 100 biopsies
+```{r}
+library(readxl)
+library(ComplexHeatmap)
+library(circlize)
+library(RColorBrewer)
+
+# Open file (change the relative path accordingly)
+# Because of gene duplicates between the signatures, rename the duplicates 
+# The first column contains information about the gene signature (numeric value)
+Figure.4d <- read_excel("~/Desktop/Review/Final figures/Figure 4/Figure 4d/Top_1000_Pathways.xlsx", sheet = "100 biopsies")
+head(Figure.4d)
+
+
+# Create an annotation file which contains the information that will be appear at the top
+# Order it based on sample name (from AZ)
+Annotation <- read.delim("~/Desktop/Review/Final figures/Figure 4/Figure 4d/Annotation_100 biopsies.txt", row.names=1)
+head(Annotation)
+
+# Create a matrix to generate the heatmap
+matrix <- as.matrix(Figure.4d[,2:101])
+
+# Color coding for the top bar
+col_fun = list(NE_Status = c("Non NE" = "#31a354", "NE" = "#fb6a4a"),
+               NE_Score = circlize::colorRamp2(c(-0.4, 0, 0.2), c("#31a354", "white", "#fb6a4a")), 
+               Subtypes = c("SCNC-A" = "#fc8d59", "SCNC-N" = "#e6f598", "SCNC-Y" = "#74add1", "SCNC-P" = "#67001f"),
+               Subtype_2 = c("Other" = "#d8daeb", "NEv2" = "#542788")
+               )
+
+# Annotation of the top bar
+ha <- HeatmapAnnotation(NE_Status = Annotation$Status,
+                        NE_Score = Annotation$Score, 
+                        Subtypes = Annotation$NAPY,
+                        Subtype_2 = Annotation$Resistance, 
+                        annotation_name_gp = gpar(fontsize = 7),
+                        col = col_fun,
+                        name = "z-score log2(TMM_FPKM+1)"           
+                        )
+
+
+# Create the heatmap
+Heatmap(matrix,  
+        clustering_distance_rows = "euclidean",
+        clustering_method_rows = "average",
+        top_annotation = ha,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 3),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "z-score ssGSEA", 
+                                    direction = "horizontal", 
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+```
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 4/Figure 4d")
+
+pdf(file = "Figure 4d_100 biopsies.pdf", width = 7, height = 5)
+
+Heatmap(matrix, 
+        top_annotation = ha,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 3),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "z-score ssGSEA", 
+                                    direction = "horizontal", 
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+
+dev.off()
+```
+
+
+`
+72 patients
+```{r}
+library(readxl)
+library(ComplexHeatmap)
+library(circlize)
+library(RColorBrewer)
+
+# Open file (change the relative path accordingly)
+# Because of gene duplicates between the signatures, rename the duplicates 
+# The first column contains information about the gene signature (numeric value)
+Figure.4d_2 <- read_excel("~/Desktop/Review/Final figures/Figure 4/Figure 4d/Top_1000_Pathways.xlsx", sheet = "72 patients")
+head(Figure.4d_2)
+
+
+# Create an annotation file which contains the information that will be appear at the top
+# Order it based on sample name (from AZ)
+Annotation <- read.delim("~/Desktop/Review/Final figures/Figure 4/Figure 4d/Annotation_72 patients.txt", row.names=1)
+head(Annotation)
+
+# Create a matrix to generate the heatmap
+matrix <- as.matrix(Figure.4d_2[,2:73])
+
+# Color coding for the top bar
+col_fun = list(NE_Status = c("Non NE" = "#31a354", "NE" = "#fb6a4a"),
+               NE_Score = circlize::colorRamp2(c(-0.4, 0, 0.2), c("#31a354", "white", "#fb6a4a")), 
+               Subtypes = c("SCNC-A" = "#fc8d59", "SCNC-N" = "#e6f598", "SCNC-Y" = "#74add1", "SCNC-P" = "#67001f"),
+               Subtype_2 = c("Other" = "#d8daeb", "NEv2" = "#542788"),
+               NEv2_Score = circlize::colorRamp2(c(-1.13, 0, 3.1), c("#d8daeb", "white", "#542788"))
+               )
+
+# Annotation of the top bar
+ha <- HeatmapAnnotation(NE_Status = Annotation$Status,
+                        NE_Score = Annotation$Score, 
+                        Subtypes = Annotation$Subtype,
+                        Subtype_2 = Annotation$Resistance, 
+                        NEv2_Score = Annotation$NEv2_pathway_Zscore,
+                        annotation_name_gp = gpar(fontsize = 7),
+                        col = col_fun,
+                        name = "z-score log2(TMM_FPKM+1)"           
+                        )
+
+# Annotation of the side bar
+ra <- rowAnnotation(Signature = Figure.4d_2$Pathway,   
+                    annotation_name_gp = gpar(fontsize = 7),
+                    col = col_fun
+                    )
+
+# Create the heatmap
+Heatmap(matrix, # eliminate the first column which contains the gene signature info
+        clustering_distance_columns = "pearson",
+        clustering_method_columns = "average",
+        top_annotation = ha,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 3),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "z-score ssGSEA", 
+                                    direction = "horizontal", 
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+```
+
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 4/Figure 4d")
+
+pdf(file = "Figure 4d_72 patients.pdf", width = 6.3, height = 6)
+
+Heatmap(matrix, # eliminate the first column which contains the gene signature info
+        clustering_distance_columns = "pearson",
+        clustering_method_columns = "average",
+        top_annotation = ha,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 3),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "z-score ssGSEA", 
+                                    direction = "horizontal", 
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+dev.off()
+```
+```{r}
+library("ggplot2")
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+Figure.4f <- read.delim("~/Desktop/Review/Final figures/Figure 4/Figure 4f/Figure 4f.txt", row.names=1)
+head(Figure.4f)
+
+# Melt data
+melted <- melt(Figure.4f, id.vars="Subtype")
+
+# Order Subtype
+melted$variable <- factor(melted$variable, levels = c("HES1"))
+
+# Create the boxplot
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("Log2(FPKM+1)") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("Other" = "#d8daeb", "NEv2" = "#542788")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+```
+
+```{r}
+setwd("~/Desktop/Review/Final figures/Figure 4/Figure 4f")
+
+pdf(file = "HES1.pdf", width = 3, height = 2.5)
+
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("Log2(FPKM+1)") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("Other" = "#d8daeb", "NEv2" = "#542788")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+
+dev.off()
+```
+
+
+
+************************ Figure 5A *******************************
+
+```{r}
+library("ggplot2")
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+Figure.5a <- read.delim("~/Desktop/Review/Final figures/Figure 5/Figure 5a.txt", row.names=1)
+head(Figure.5a)
+
+# Melt data
+melted <- melt(Figure.5a, id.vars="Subtype")
+
+# Order Subtype
+melted$variable <- factor(melted$variable, levels = c("TMB"))
+
+# Create the boxplot
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("TMB (mut/Mgb)") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+```
+
+```{r}
+setwd("~/Desktop/Review/Final figures/Figure 5")
+
+pdf(file = "TMB.pdf", width = 3, height = 2.5)
+
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("TMB (mut/Mgb)") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+dev.off()
+```
+
+
+************************ Figure 6A *******************************
+
+```{r}
+library(survminer)
+library(survival)
+# Open file (change the relative path accordingly)
+# Calculate the percentage before up-loading the data
+Figure.6a <- read_excel("~/Desktop/Review/Final figures/Figure 6/Survival curves.xlsx", sheet = "On study only")
+head(Figure.6a)
+
+
+# compute kaplan-Meier survival estimate
+fit <- survfit(Surv(OS_diagnosis, Survival_Status) ~ NE50, data = Figure.6a)
+
+# Give median and 95%CI
+fit
+
+# Calculate p-value with Log-rank test
+data.survdiff <- survdiff(Surv(OS_diagnosis, Survival_Status) ~ NE50, data = Figure.6a)
+data.survdiff
+
+# Calculate HR and 95%CI using the log-rank test
+# Look at the console for the values
+HR = (data.survdiff$obs[2]/data.survdiff$exp[2])/(data.survdiff$obs[1]/data.survdiff$exp[1])
+HR
+low95 = exp(log(HR) - qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+low95
+up95 = exp(log(HR) + qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+up95
+
+# Calculate HR and 95%CI using the log-rank test (reciproqual)
+# Look at the console for the values
+HR_2 = (data.survdiff$obs[1]/data.survdiff$exp[1])/(data.survdiff$obs[2]/data.survdiff$exp[2])
+HR_2
+low95_2 = exp(log(HR_2) - qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+low95_2
+up95_2 = exp(log(HR_2) + qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+up95_2
+
+
+# Visualize with survminer
+OS_NE_nonNE <- ggsurvplot(fit, data = Figure.6a, 
+           risk.table = TRUE, 
+           risk.table.y.text.col = TRUE, # colour risk table text annotations.
+           risk.table.y.text = TRUE, # show bars instead of names in text annotations (FALSE)
+           tables.height = 0.15,
+           tables.theme = theme_cleantable(), fontsize = 6, # theme and font of the table
+           ncensor.plot = FALSE,      # plot the number of censored subjects at time t
+           # surv.median.line = "hv",  # add the median survival pointer.
+           xlab="Time from diagnosis (months)",
+           ylab="OS",
+           font.main = c(16), font.x = c(16), font.y = c(16), font.tickslab = c(16), 
+           legend.labs = c("NE", "Non-NE"), # change legend labels.
+           legend.title = "Trial",
+           pval = TRUE, pval.coord=c(-1.2,0.005), pval.size = 6,  # Add p-value and intervals
+           palette = c("#fb6a4a", "#31a354"))
+OS_NE_nonNE
+
+# Save
+setwd("~/Desktop/Review/Final figures/Figure 6/Figure 6a")
+
+pdf("OS_NE_nonNE.pdf")
+print(OS_NE_nonNE)
+dev.off()
+```
+
+
+************************ Figure 6B *******************************
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(plyr)
+library(RColorBrewer)
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+# Calculate the percentage before up-loading the data
+Figure.6b <- read_excel("~/Desktop/Review/Final figures/Figure 6/Figure 6b/Barplot.xlsx", sheet = "CB_3")
+head(Figure.6b)
+
+
+# Order Subtype
+Figure.6b$Subtype <- factor(Figure.6b$Subtype, levels = c("NE", "Non-NE"))
+
+
+# Draw bar plot 
+# To fill in the opposite order, replace 'fill=forcts::fct_rev(variable)' by 'fill=variable'
+ggplot(Figure.6b, aes(x=Drug, y=Percent, fill=Subtype)) + 
+       geom_bar(stat="identity", width = 0.4) +    
+       xlab(" ") + ylab("") +
+       scale_y_continuous(name="Clinical benefit rate (%)", limits=c(0, 120)) +
+       theme_classic(base_size = 12) + 
+       theme(axis.title.y=element_text(size=12)) + 
+       theme(axis.text.y=element_text(size=12, colour = "black")) +
+       theme(axis.text.x=element_text(size=12, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c ("#fb6a4a", "#31a354")) 
+```
+
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Figure 6/Figure 6b")
+
+pdf(file = "Figure 6b_Barplot_CB_3.pdf", width = 5, height = 3.6)
+
+ggplot(Figure.6b, aes(x=Drug, y=Percent, fill=Subtype)) + 
+       geom_bar(stat="identity", width = 0.4) +    
+       xlab(" ") + ylab("") +
+       scale_y_continuous(name="Clinical benefit rate (%)", limits=c(0, 100)) +
+       theme_classic(base_size = 12) + 
+       theme(axis.title.y=element_text(size=12)) + 
+       theme(axis.text.y=element_text(size=12, colour = "black")) +
+       theme(axis.text.x=element_text(size=12, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c ("#fb6a4a", "#31a354")) 
+
+dev.off()
+```
+
+************************ Figure 6C *******************************
+
+```{r}
+library(survminer)
+library(survival)
+# Open file (change the relative path accordingly)
+# Calculate the percentage before up-loading the data
+Figure.6c <- read_excel("~/Desktop/Review/Final figures/Figure 6/Survival curves.xlsx", sheet = "On study only")
+head(Figure.6c)
+
+
+# compute kaplan-Meier survival estimate
+fit <- survfit(Surv(PFS, PFS_Status) ~ Study_NE, data = Figure.6c)
+
+# Give median and 95%CI
+fit
+
+# Calculate p-value with Log-rank test
+data.survdiff <- survdiff(Surv(PFS, PFS_Status) ~ Study_NE, data = Figure.6c)
+data.survdiff
+
+# Calculate HR and 95%CI using the log-rank test
+# Look at the console for the values
+HR = (data.survdiff$obs[2]/data.survdiff$exp[2])/(data.survdiff$obs[1]/data.survdiff$exp[1])
+HR
+low95 = exp(log(HR) - qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+low95
+up95 = exp(log(HR) + qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+up95
+
+# Calculate HR and 95%CI using the log-rank test (reciproqual)
+# Look at the console for the values
+HR_2 = (data.survdiff$obs[1]/data.survdiff$exp[1])/(data.survdiff$obs[2]/data.survdiff$exp[2])
+HR_2
+low95_2 = exp(log(HR_2) - qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+low95_2
+up95_2 = exp(log(HR_2) + qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+up95_2
+
+
+# Visualize with survminer
+PFS_Subtypes <- ggsurvplot(fit, data = Figure.6c, 
+           risk.table = TRUE, 
+           risk.table.y.text.col = TRUE, # colour risk table text annotations.
+           risk.table.y.text = TRUE, # show bars instead of names in text annotations (FALSE)
+           tables.height = 0.2,
+           tables.theme = theme_cleantable(), fontsize = 6, # theme and font of the table
+           ncensor.plot = FALSE,      # plot the number of censored subjects at time t
+           # surv.median.line = "hv",  # add the median survival pointer.
+           xlab="Time from start of therapy (months)",
+           ylab="PFS",
+           font.main = c(16), font.x = c(16), font.y = c(16), font.tickslab = c(16), 
+           legend.labs = c("ATRi_NE", "ATRi_Non-NE", "ICI_NE", "ICI_Non-NE"), # change legend labels.
+           legend.title = "Trial",
+           pval = TRUE, pval.coord=c(-1.2,0.005), pval.size = 6, # Add p-value and intervals
+           palette = c("#2E9FDF", "#d1e5f0", "#E7B800",  "#f6e8c3"))
+PFS_Subtypes
+
+# Save
+setwd("~/Desktop/Review/Final figures/Figure 6/Figure 6c")
+
+pdf("PFS_Subtypes.pdf")
+print(PFS_Subtypes)
+dev.off()
+```
+
+
+
+
+************************ Figure 6D *******************************
+
+```{r}
+library(survminer)
+library(survival)
+# Open file (change the relative path accordingly)
+# Calculate the percentage before up-loading the data
+Figure.6d <- read_excel("~/Desktop/Review/Final figures/Figure 6/Survival curves.xlsx", sheet = "On study only")
+head(Figure.6d)
+
+
+# compute kaplan-Meier survival estimate
+fit <- survfit(Surv(OS_C1D1, Survival_Status) ~ Study_NE, data = Figure.6d)
+
+# Give median and 95%CI
+fit
+
+# Calculate p-value with Log-rank test
+data.survdiff <- survdiff(Surv(OS_C1D1, Survival_Status) ~ Study_NE, data = Figure.6d)
+data.survdiff
+
+# Calculate HR and 95%CI using the log-rank test
+# Look at the console for the values
+HR = (data.survdiff$obs[2]/data.survdiff$exp[2])/(data.survdiff$obs[1]/data.survdiff$exp[1])
+HR
+low95 = exp(log(HR) - qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+low95
+up95 = exp(log(HR) + qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+up95
+
+# Calculate HR and 95%CI using the log-rank test (reciproqual)
+# Look at the console for the values
+HR_2 = (data.survdiff$obs[1]/data.survdiff$exp[1])/(data.survdiff$obs[2]/data.survdiff$exp[2])
+HR_2
+low95_2 = exp(log(HR_2) - qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+low95_2
+up95_2 = exp(log(HR_2) + qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+up95_2
+
+
+# Visualize with survminer
+OS_Subtypes <- ggsurvplot(fit, data = Figure.6d, 
+           risk.table = TRUE, 
+           risk.table.y.text.col = TRUE, # colour risk table text annotations.
+           risk.table.y.text = TRUE, # show bars instead of names in text annotations (FALSE)
+           tables.height = 0.2,
+           tables.theme = theme_cleantable(), fontsize = 6, # theme and font of the table
+           ncensor.plot = FALSE,      # plot the number of censored subjects at time t
+           # surv.median.line = "hv",  # add the median survival pointer.
+           xlab="Time from start of therapy (months)",
+           ylab="OS",
+           font.main = c(16), font.x = c(16), font.y = c(16), font.tickslab = c(16), 
+           legend.labs = c("ATRi_NE", "ATRi_Non-NE", "ICI_NE", "ICI_Non-NE"), # change legend labels.
+           legend.title = "Trial",
+           pval = TRUE, pval.coord=c(-1.2,0.005), pval.size = 6, # Add p-value and intervals
+           palette = c("#2E9FDF", "#d1e5f0", "#E7B800",  "#f6e8c3"))
+OS_Subtypes
+
+# Save
+setwd("~/Desktop/Review/Final figures/Figure 6/Figure 6d")
+
+pdf("OS_Subtypes.pdf")
+print(OS_Subtypes)
+dev.off()
+```
+
+
+
+************************ Figure 6E and F *******************************
+
+
+Stepwise multivariate Cox proportional hazard model (PFS and OS from C1D1)
+```{r}
+library(My.stepwise)
+
+# Open file
+Figure.6e.f <- read.delim("~/Desktop/Review/Final figures/Figure 6/Figure 6e.f/Figure 6e.txt")
+head(Figure.6e.f)
+
+# Create the list of covariates to include in the regression model
+my.variable.list <- c("Age", "Sex", "Stage","Chemotherapy", "Systemic_treatment", "Study")
+
+
+# Regression model for OS since C1D1 with all the covariates included
+My.stepwise.coxph(Time = "OS_C1D1", Status = "Survival", variable.list = my.variable.list,
+                  in.variable = c("Age", "Sex", "Stage", "Chemotherapy","Systemic_treatment", "Study"), data = Figure.6e.f)
+
+# Regression model for OS since C1D1 with only the covariate 'study' always included
+My.stepwise.coxph(Time = "OS_C1D1", Status = "Survival", variable.list = my.variable.list,
+                  in.variable = c("Study"), data = Figure.6e.f)
+
+# Regression model for PFS with all the covariates included
+My.stepwise.coxph(Time = "PFS", Status = "PFS_Status", variable.list = my.variable.list,
+                  in.variable = c("Age", "Sex", "Stage", "Chemotherapy","Systemic_treatment",  
+                                  "Study"), data = Figure.6e.f)
+
+# Regression model for PFS with only the covariate 'study' always included
+My.stepwise.coxph(Time = "PFS", Status = "PFS_Status", variable.list = my.variable.list,
+                  in.variable = c("Study"), data = Figure.6e.f)
+```
+
+Other approach: multivariate Cox proportional hazard model (PFS and OS from C1D1)
+```{r}
+library(survival)
+library(survminer)
+
+# Open file
+Figure.6e.f <- read.delim("~/Desktop/Review/Final figures/Figure 6/Figure 6e.f/Figure 6e.txt")
+head(Figure.6e.f)
+
+# Fit survival data 
+surv_object <- Surv(time = Figure.6e.f$OS_C1D1, event = Figure.6e.f$Survival)
+PFS_object <- Surv(time = Figure.6e.f$PFS, event = Figure.6e.f$PFS_Status)
+
+# Fit a Cox proportional hazards model
+surv.coxph <- coxph(surv_object ~ Age + Sex + Stage + Chemotherapy + Systemic_treatment + Study, 
+                   data = Figure.6e.f)
+
+PFS.coxph <- coxph(PFS_object ~ Age + Sex + Stage + Chemotherapy + Systemic_treatment + Study, 
+                   data = Figure.6e.f)
+
+# Visualize the results
+ggforest(surv.coxph, data = Figure.6e.f)
+ggforest(PFS.coxph, data = Figure.6e.f)
+
+```
+
+
+
+************************ Supplementary Figure 3 ***************************
+
+```{r}
+library(VennDiagram)
+library(RColorBrewer)
+
+# Open file
+Figure.S3 <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 3/Supplementary Figure 3b.txt")
+head(Figure.S3)
+
+# Generate 3 sets of genes
+NE10genes <- Figure.S3$X10_genes
+NE50genes <- Figure.S3$X50_genes
+NE70genes <- Figure.S3$X70_genes
+
+# Color
+myCol <- c("NE50genes" = "#fdae6b", "NE10genes" = "#e6550d", "NE70genes"= "#fee6ce")
+
+# Chart
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 3")
+
+venn.diagram(x = list(NE10genes, NE50genes, NE70genes),
+             category.names = c("10-genes" , "50-genes" , "70-genes"),
+             filename = 'FigureS3b_venndiagramm.png',
+             output=TRUE,
+                   
+            # Output features
+             imagetype="png" ,
+             height = 480 , 
+             width = 480 , 
+             resolution = 300,
+             compression = "lwd",
+
+        
+            # Circles
+             lwd = 2,
+             lty = 'blank',
+             fill = myCol,
+        
+            # Numbers
+             cex = .6,
+             fontface = "bold",
+             fontfamily = "sans",
+        
+            # Set names
+             cat.cex = 0.6,
+             cat.fontface = "bold",
+             cat.default.pos = "outer",
+             cat.pos = c(-27, 27, 135),
+             cat.dist = c(0.055, 0.055, 0.085),
+             cat.fontfamily = "sans",
+             rotation = 1
+             )
+```
+
+
+
+
+************************ Supplementary Figure 4C **************************
+
+```{r}
+library(ggplot2)
+library(RColorBrewer)
+
+
+# Open file (change the relative path accordingly)
+Figure.S4c <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 4/Supplementary Figure 4c/Figure S4c.txt", row.names=1)
+head(Figure.S4c)
+
+# Calculate the percentage
+data_percentage <- apply(Figure.S4c, 2, function(x){x*100/sum(x,na.rm=T)})
+
+# Create the color
+color <- c("High NE" = "#fcbba1", "Non-NE" = "#c7e9c0")
+
+# Create the barplot
+barplot(data_percentage, col=color , border="white", xlab="Patients", ylab="Relative Percent", cex.names= 0.2, cex.lab=1, cex.axis=0.7)
+```
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 4/Supplementary Figure 4c")
+
+pdf(file = "Figure S4c_BarPlot Cibersort.pdf", width = 9, height = 5)
+
+barplot(data_percentage, col=color , border="white", xlab="Patients", ylab="Relative Percent", cex.names= 0.2, cex.lab=1, cex.axis=0.7)
+
+dev.off()
+```
+
+
+
+************************ Supplementary Figure 6A **************************
+
+
+Heatmap from 100 biopsies 
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+library(RColorBrewer)
+
+# Open file (change the relative path accordingly)
+Figure.S6a <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 6/Supplementary Figure 6a/FigureS6a_zscore_100_biopsies.txt", row.names=1)
+head(Figure.S6a)
+
+# Create an annotation file which contains the information that will be appear at the top
+Annotation <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 6/Supplementary Figure 6a/Annotation_100 biopsies.txt", row.names=1)
+head(Annotation)
+
+# Create a matrix to generate the heatmap
+matrix <- as.matrix(Figure.S6a)
+
+# Color coding for the top bar
+col_fun = list(NE_Status = c("Non NE" = "#31a354", "NE" = "#fb6a4a"),
+               NE_Score = circlize::colorRamp2(c(-0.4, 0, 0.2), c("#31a354", "white", "#fb6a4a")), 
+               Subtypes = c("SCNC-A" = "#fc8d59", "SCNC-N" = "#e6f598", "SCNC-Y" = "#74add1", "SCNC-P" = "#67001f"),
+               Histology = c("SCLC" = "#ffff33", "EPSCC" = "#2b8cbe")
+               )
+
+# Annotation of the top bar
+ha <- HeatmapAnnotation(NE_Status = Annotation$Status,
+                        NE_Score = Annotation$Score, 
+                        Subtypes = Annotation$NAPY, 
+                        Histology = Annotation$Histo,
+                        annotation_name_gp = gpar(fontsize = 7),
+                        col = col_fun,
+                        name = "z-score log2(TMM_FPKM+1)"           
+                        )
+# Create the heatmap
+Heatmap(matrix, 
+        top_annotation = ha,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 7),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "Z-score log2(TMM_FPKM+1)", 
+                                    direction = "horizontal", 
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+```
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 6/Supplementary Figure 6a")
+
+pdf(file = "Figure S6a_100 biopsies_Zscore log2(FPKM+1).pdf",  width = 12, height = 5)
+
+Heatmap(matrix, 
+        top_annotation = ha,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 7),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "Z-score log2(TMM_FPKM+1)",                                     
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+
+dev.off()
+```
+
+
+Heatmap from 72 patients
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+library(RColorBrewer)
+
+# Open file (change the relative path accordingly)
+Figure.S6a <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 6/Supplementary Figure 6a/FigureS6a_zscore_72_patients.txt", row.names=1)
+head(Figure.S6a)
+
+# Create an annotation file which contains the information that will be appear at the top
+Annotation <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 6/Supplementary Figure 6a/Annotation_72 patients.txt", row.names=1)
+head(Annotation)
+
+# Create a matrix to generate the heatmap
+matrix <- as.matrix(Figure.S6a)
+
+# Color coding for the top bar
+col_fun = list(NE_Status = c("Non NE" = "#31a354", "NE" = "#fb6a4a"),
+               NE_Score = circlize::colorRamp2(c(-0.4, 0, 0.2), c("#31a354", "white", "#fb6a4a")), 
+               Subtypes = c("SCNC-A" = "#fc8d59", "SCNC-N" = "#e6f598", "SCNC-Y" = "#74add1",   "SCNC-P" = "#67001f"),
+               Histology = c("SCLC" = "#ffff33", "EPSCC" = "#2b8cbe")
+               )
+
+# Annotation of the top bar
+ha <- HeatmapAnnotation(NE_Status = Annotation$Status,
+                        NE_Score = Annotation$Score, 
+                        Subtypes = Annotation$NAPY,
+                        Histology = Annotation$Histo,
+                        annotation_name_gp = gpar(fontsize = 7),
+                        col = col_fun,
+                        name = "z-score log2(TMM_FPKM+1)"           
+                        )
+# Create the heatmap
+Heatmap(matrix, 
+        top_annotation = ha,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 7),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "Z-score log2(TMM_FPKM+1)", 
+                                    direction = "horizontal", 
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+```
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 6/Supplementary Figure 6a")
+
+pdf(file = "Figure S6a_72 patients_Zscore log2(FPKM+1).pdf",  width = 12, height = 5)
+
+Heatmap(matrix, 
+        top_annotation = ha,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 7),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "Z-score log2(TMM_FPKM+1)",                                     
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+
+dev.off()
+```
+
+
+************************ Supplementary Figure 6B **************************
+
+
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+library(RColorBrewer)
+
+# Open file (change the relative path accordingly)
+Figure.S6b <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 6/Supplementary Figure 6b/Figure S6b_log2_100 biopsies.txt", row.names=1)
+head(Figure.S6b)
+
+# Create an annotation file which contains the information that will be appear at the top
+Annotation <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 6/Supplementary Figure 6b/Annotation_100 biopsies.txt", row.names=1)
+head(Annotation)
+
+# Create a matrix to generate the heatmap
+matrix <- as.matrix(Figure.S6b)
+
+# Color coding for the top bar
+col_fun = list(NE_Status = c("Non NE" = "#31a354", "NE" = "#fb6a4a"),
+               NE_Score = circlize::colorRamp2(c(-0.4, 0, 0.2), c("#31a354", "white", "#fb6a4a")), 
+               Subtypes = c("SCNC-A" = "#fc8d59", "SCNC-N" = "#e6f598", "SCNC-Y" = "#74add1", "SCNC-P" = "#67001f"),
+               Histology = c("SCLC" = "#ffff33", "EPSCC" = "#2b8cbe")
+               )
+
+# Annotation of the top bar
+ha <- HeatmapAnnotation(NE_Status = Annotation$Status,
+                        NE_Score = Annotation$Score, 
+                        Subtypes = Annotation$NAPY, 
+                        Histology = Annotation$Histo, 
+                        annotation_name_gp = gpar(fontsize = 7),
+                        col = col_fun,
+                        name = "z-score log2(TMM_FPKM+1)"           
+                        )
+# Create the heatmap
+Heatmap(matrix, 
+        top_annotation = ha,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 7),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "Z-score log2(TMM_FPKM+1)", 
+                                    direction = "horizontal", 
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+```
+
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 6/Supplementary Figure 6b")
+
+pdf(file = "Figure S6b_100 biopsies_log2(FPKM +1).pdf",  width = 11, height = 4)
+
+Heatmap(matrix, 
+        top_annotation = ha,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 7),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "log2(TMM_FPKM+1)",                                     
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+
+dev.off()
+```
+
+
+
+**************************** Supplementary Figure 6D *********************************
+
+
+
+```{r}
+# Open libraries
+library("ggfortify")
+library("ggplot2")
+
+# Open file (change the relative path accordingly)
+Figure.S6d <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 6/Supplementary Figure 6d/Figure S6d_100 biopsies.txt", row.names=1)
+head(Figure.S6d)
+
+# Generate the PCA
+pca_res <- prcomp(Figure.S6d[2:5], scale = TRUE)
+summary(pca_res)
+
+
+# Plot PCA
+autoplot(pca_res, data = Figure.S6d, colour = 'Subtype',
+         loadings = FALSE, 
+         scale = FALSE,
+         size = 5) + theme_classic() + scale_colour_manual(values=c("SCNC-A" = "#fc8d59", "SCNC-N" = "#e6f598", "SCNC-Y" = "#74add1",   "SCNC-P" = "#67001f"))
+```
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 6/Supplementary Figure 6d")
+
+pdf(file = "Figure S6d_PCA_100 biopsies.pdf", width = 6.6, height = 3.5)
+
+autoplot(pca_res, data = Figure.S6d, colour = 'Subtype',
+         loadings = FALSE, 
+         scale = FALSE,
+         size = 5) + theme_classic() + scale_colour_manual(values=c("SCNC-A" = "#fc8d59", "SCNC-N" = "#e6f598", "SCNC-Y" = "#74add1",   "SCNC-P" = "#67001f"))
+
+dev.off()
+```
+
+
+
+**************************** Supplementary Figure 7A *********************************
+
+Heatmap from 100 biopsies
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+library(RColorBrewer)
+
+# Open file (change the relative path accordingly)
+Figure.S7a <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 7/Supplementary Figure 7a/FigureS7a_zscore_100_biopsies.txt", row.names=1)
+head(Figure.S7a)
+
+# Create an annotation file which contains the information that will be appear at the top
+Annotation <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 7/Supplementary Figure 7a/Annotation_100 biopsies.txt", row.names=1)
+head(Annotation)
+
+# Create a matrix to generate the heatmap
+matrix <- as.matrix(Figure.S7a)
+
+# Color coding for the top bar
+col_fun = list(NE_Status = c("Non NE" = "#31a354", "NE" = "#fb6a4a"),
+               NE_Score = circlize::colorRamp2(c(-0.4, 0, 0.2), c("#31a354", "white", "#fb6a4a")), 
+               Subtypes = c("SCNC-A" = "#fc8d59", "SCNC-N" = "#e6f598", "SCNC-Y" = "#74add1", "SCNC-P" = "#67001f"),
+               Histology = c("SCLC" = "#ffff33", "EPSCC" = "#2b8cbe")
+               )
+
+# Annotation of the top bar
+ha <- HeatmapAnnotation(NE_Status = Annotation$Status,
+                        NE_Score = Annotation$Score, 
+                        Subtypes = Annotation$NAPY, 
+                        Histology = Annotation$Histo,
+                        annotation_name_gp = gpar(fontsize = 7),
+                        col = col_fun,
+                        name = "z-score log2(TMM_FPKM+1)"           
+                        )
+# Create the heatmap
+Heatmap(matrix, 
+        top_annotation = ha,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 7),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "Z-score log2(TMM_FPKM+1)", 
+                                    direction = "horizontal", 
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+```
+
+
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 7/Supplementary Figure 7a")
+
+pdf(file = "Figure S7a_100 biospies_Z-score log2(FPKM+1).pdf",  width = 11, height = 3.5)
+
+Heatmap(matrix, 
+        top_annotation = ha,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 7),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "Z-score log2(TMM_FPKM+1)",                                     
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+
+dev.off()
+```
+
+
+
+Heatmap 72 patients
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+library(RColorBrewer)
+
+# Open file (change the relative path accordingly)
+Figure.S7a <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 7/Supplementary Figure 7a/FigureS7a_zscore_72_patients.txt", row.names=1)
+head(Figure.S7a)
+
+# Create an annotation file which contains the information that will be appear at the top
+Annotation <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 7/Supplementary Figure 7a/Annotation_72 patients.txt", row.names=1)
+head(Annotation)
+
+# Create a matrix to generate the heatmap
+matrix <- as.matrix(Figure.S7a)
+
+# Color coding for the top bar
+col_fun = list(NE_Status = c("Non NE" = "#31a354", "NE" = "#fb6a4a"),
+               NE_Score = circlize::colorRamp2(c(-0.4, 0, 0.2), c("#31a354", "white", "#fb6a4a")), 
+               Subtypes = c("SCNC-A" = "#fc8d59", "SCNC-N" = "#e6f598", "SCNC-Y" = "#74add1", "SCNC-P" = "#67001f"),
+               Histology = c("SCLC" = "#ffff33", "EPSCC" = "#2b8cbe"))
+
+# Annotation of the top bar
+ha <- HeatmapAnnotation(NE_Status = Annotation$Status,
+                        NE_Score = Annotation$Score, 
+                        Subtypes = Annotation$NAPY, 
+                        Histology = Annotation$Histo,
+                        annotation_name_gp = gpar(fontsize = 7),
+                        col = col_fun,
+                        name = "z-score log2(TMM_FPKM+1)"           
+                        )
+# Create the heatmap
+Heatmap(matrix, 
+        top_annotation = ha,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 7),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "Zscore log2(TMM_FPKM+1)", 
+                                    direction = "horizontal", 
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+```
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 7/Supplementary Figure 7a")
+
+pdf(file = "Figure S7a_72 patients_log2(FPKM+1).pdf",  width = 11, height = 3)
+
+Heatmap(matrix, 
+        top_annotation = ha,
+        row_title_gp = gpar(fontsize = 7), 
+        row_names_gp = gpar(fontsize = 7),
+        column_names_gp = gpar(fontsize = 5),
+        heatmap_legend_param = list(title = "log2(TMM_FPKM+1)",                                     
+                                    title_position="topleft", 
+                                    title_gp=gpar(fontsize=7, fontface="bold")) 
+        )
+
+dev.off()
+```
+
+**************************** Supplementary Figure 8D *********************************
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(plyr)
+library(RColorBrewer)
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+# Calculate the percentage before up-loading the data
+Figure.S8d <- read_excel("~/Desktop/Review/Final figures/Supplementary Figure 8/Barplot.xlsx", sheet = "Synaptophysin")
+head(Figure.S8d)
+
+
+# Order Subtype
+Figure.S8d$Subtype <- factor(Figure.S8d$Subtype, levels = c( "Non-NE", "NE"))
+Figure.S8d$IHC <- factor(Figure.S8d$IHC, levels = c("Synaptophysin Pos", "Synaptophysin Neg"))
+
+# Draw bar plot 
+# To fill in the opposite order, replace 'fill=forcts::fct_rev(variable)' by 'fill=variable'
+ggplot(Figure.S8d, aes(x=IHC, y=Percent, fill=Subtype)) + 
+       geom_bar(stat="identity", width = 0.4) +    
+       xlab(" ") + ylab("") +
+       scale_y_continuous(name="Proportion (%)", limits=c(0, 120)) +
+       theme_classic(base_size = 12) + 
+       theme(axis.title.y=element_text(size=12)) + 
+       theme(axis.text.y=element_text(size=12, colour = "black")) +
+       theme(axis.text.x=element_text(size=12, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c ("#31a354", "#fb6a4a")) 
+```
+
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 8")
+
+pdf(file = "Synaptophysin.pdf", width = 3.5, height = 2.5)
+
+ggplot(Figure.S8d, aes(x=IHC, y=Percent, fill=Subtype)) + 
+       geom_bar(stat="identity", width = 0.4) +    
+       xlab(" ") + ylab("") +
+       scale_y_continuous(name="Proportion (%)", limits=c(0, 100)) +
+       theme_classic(base_size = 8) + 
+       theme(axis.title.y=element_text(size=8)) + 
+       theme(axis.text.y=element_text(size=8, colour = "black")) +
+       theme(axis.text.x=element_text(size=8, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c ("#31a354", "#fb6a4a")) 
+
+dev.off()
+```
+
+
+**************************** Supplementary Figure 8E *********************************
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(plyr)
+library(RColorBrewer)
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+# Calculate the percentage before up-loading the data
+Figure.S8e <- read_excel("~/Desktop/Review/Final figures/Supplementary Figure 8/Barplot.xlsx", sheet = "Chromogranin")
+head(Figure.S8e)
+
+
+# Order Subtype
+Figure.S8e$Subtype <- factor(Figure.S8e$Subtype, levels = c( "Non-NE", "NE"))
+Figure.S8e$IHC <- factor(Figure.S8e$IHC, levels = c("Chromogranin Pos", "Chromogranin Neg"))
+
+# Draw bar plot 
+# To fill in the opposite order, replace 'fill=forcts::fct_rev(variable)' by 'fill=variable'
+ggplot(Figure.S8e, aes(x=IHC, y=Percent, fill=Subtype)) + 
+       geom_bar(stat="identity", width = 0.4) +    
+       xlab(" ") + ylab("") +
+       scale_y_continuous(name="Proportion (%)", limits=c(0, 120)) +
+       theme_classic(base_size = 12) + 
+       theme(axis.title.y=element_text(size=12)) + 
+       theme(axis.text.y=element_text(size=12, colour = "black")) +
+       theme(axis.text.x=element_text(size=12, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c ("#31a354", "#fb6a4a")) 
+```
+
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 8")
+
+pdf(file = "Chromogranin.pdf", width = 3.5, height = 2.5)
+
+ggplot(Figure.S8e, aes(x=IHC, y=Percent, fill=Subtype)) + 
+       geom_bar(stat="identity", width = 0.4) +    
+       xlab(" ") + ylab("") +
+       scale_y_continuous(name="Proportion (%)", limits=c(0, 100)) +
+       theme_classic(base_size = 8) + 
+       theme(axis.title.y=element_text(size=8)) + 
+       theme(axis.text.y=element_text(size=8, colour = "black")) +
+       theme(axis.text.x=element_text(size=8, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c ("#31a354", "#fb6a4a")) 
+
+dev.off()
+```
+
+
+**************************** Supplementary Figure 8F *********************************
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(plyr)
+library(RColorBrewer)
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+# Calculate the percentage before up-loading the data
+Figure.S8f <- read_excel("~/Desktop/Review/Final figures/Supplementary Figure 8/Barplot.xlsx", sheet = "Chromogranin_2")
+head(Figure.S8f)
+
+
+# Order Subtype
+Figure.S8f$Subtype <- factor(Figure.S8f$Subtype, levels = c( "Non-NE", "NE"))
+Figure.S8f$IHC <- factor(Figure.S8f$IHC, levels = c("SCNC-A", "SCNC-N", "SCNC-Y", "SCNC-P"))
+
+# Draw bar plot 
+# To fill in the opposite order, replace 'fill=forcts::fct_rev(variable)' by 'fill=variable'
+ggplot(Figure.S8f, aes(x=IHC, y=Percent, fill=Subtype)) + 
+       geom_bar(stat="identity", width = 0.4) +    
+       xlab(" ") + ylab("") +
+       scale_y_continuous(name="Proportion (%)", limits=c(0, 120)) +
+       theme_classic(base_size = 12) + 
+       theme(axis.title.y=element_text(size=12)) + 
+       theme(axis.text.y=element_text(size=12, colour = "black")) +
+       theme(axis.text.x=element_text(size=12, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c ("#31a354", "#fb6a4a")) 
+```
+
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 8")
+
+pdf(file = "Chromogranin_NAPY.pdf", width = 5, height = 2.5)
+
+ggplot(Figure.S8f, aes(x=IHC, y=Percent, fill=Subtype)) + 
+       geom_bar(stat="identity", width = 0.4) +    
+       xlab(" ") + ylab("") +
+       scale_y_continuous(name="Proportion (%)", limits=c(0, 100)) +
+       theme_classic(base_size = 8) + 
+       theme(axis.title.y=element_text(size=8)) + 
+       theme(axis.text.y=element_text(size=8, colour = "black")) +
+       theme(axis.text.x=element_text(size=8, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c ("#31a354", "#fb6a4a")) 
+dev.off()
+```
+
+
+******************** Supplementary 9 *************************
+
+```{r}
+library(ggplot2)
+library(RColorBrewer)
+
+
+# Open file (change the relative path accordingly)
+Figure.S9 <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 9/Figure S9.txt", row.names=1)
+head(Figure.S9)
+
+# Calculate the percentage
+data_percentage <- apply(Figure.S9, 2, function(x){x*100/sum(x,na.rm=T)})
+
+# Create the color
+color <- c("#f6e8c3", "#d8b365", "#8c510a")
+
+# Create the barplot
+barplot(data_percentage, col=color , border="white", xlab="Patients", ylab="Relative Percent", cex.names= 0.2, cex.lab=1, cex.axis=0.7)
+```
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 9")
+
+pdf(file = "Figure S9_BarPlot Cibersort.pdf", width = 9, height = 5)
+
+barplot(data_percentage, col=color , border="white", xlab="Patients", ylab="Relative Percent", cex.names= 0.2, cex.lab=1, cex.axis=0.7)
+
+dev.off()
+```
+
+
+
+******************** Supplementary 10A *************************
+
+```{r}
+library(reshape2)
+library("ggplot2")
+
+# Open file (change the relative path accordingly)
+Figure.S10_EMT <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 10/Figure S10_EMT.txt", row.names=1)
+head(Figure.S10_EMT)
+
+# Melt data
+melted <- melt(Figure.S10_EMT, id.vars="Subtype")
+
+# Order Subtype
+melted$variable <- factor(melted$variable, levels = c("CDH2", "EPCAM","TGFB1","VIM"))
+
+# Create the boxplot
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("Log2(FPKM+1)") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+
+```
+
+
+```{r}
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 10")
+
+pdf(file = "Figure.S10_EMT.pdf", width = 4, height = 3)
+
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("Log2(FPKM+1)") +
+       theme_classic(base_size = 8) + 
+       theme(axis.title.y=element_text(size=8)) + 
+       theme(axis.text.y=element_text(size=8)) +
+       theme(axis.text.x=element_text(size=8)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+
+dev.off()
+```
+
+
+******************** Supplementary 10B *************************
+
+```{r}
+library(reshape2)
+library("ggplot2")
+
+# Open file (change the relative path accordingly)
+Figure.S10_DDR <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 10/Figure S10_DDR.txt", row.names=1)
+head(Figure.S10_DDR)
+
+# Melt data
+melted <- melt(Figure.S10_DDR, id.vars="Subtype")
+
+# Order Subtype
+melted$variable <- factor(melted$variable, levels = c("CDC25A","CDC25C","AURKB","PLK1","CDK2","RAD51","CHEK2","WEE1","CHEK1","CDC25B","CDK1","CCNB2", "CCNA2", "PARP2","BRCA1","CCNB1","TP53BP1","TOPBP1","AURKA","PRKDC","PARP1","MCM3", "TOP2A", "EZH2","SLFN11"))
+
+# Create the boxplot
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("Log2(FPKM+1)") +
+       theme_classic(base_size = 8) + 
+       theme(axis.title.y=element_text(size=8)) + 
+       theme(axis.text.y=element_text(size=8)) +
+       theme(axis.text.x=element_text(size=5)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+```
+
+
+```{r}
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 10")
+
+pdf(file = "Figure.S10_DDR.pdf", width = 11, height = 4)
+
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("Log2(FPKM+1)") +
+       theme_classic(base_size = 8) + 
+       theme(axis.title.y=element_text(size=8)) + 
+       theme(axis.text.y=element_text(size=8)) +
+       theme(axis.text.x=element_text(size=5)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+
+dev.off()
+```
+
+******************** Supplementary 10C *************************
+
+```{r}
+library(reshape2)
+library("ggplot2")
+
+# Open file (change the relative path accordingly)
+Figure.S10_Immune <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 10/Figure S10_Immune.txt", row.names=1)
+head(Figure.S10_Immune)
+
+# Melt data
+melted <- melt(Figure.S10_Immune, id.vars="Subtype")
+
+# Order Subtype
+melted$variable <- factor(melted$variable, levels = c("CD274","CD8A","CD8B", "CD4", "IFIT2", "IFIT3", "IFIT1","IFITM1","IFITM2",	"IFITM3","HLA.E","HLA.B","HLA.C","B2M"))
+
+# Create the boxplot
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("Log2(FPKM+1)") +
+       theme_classic(base_size = 8) + 
+       theme(axis.title.y=element_text(size=8)) + 
+       theme(axis.text.y=element_text(size=8)) +
+       theme(axis.text.x=element_text(size=8)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+```
+
+
+
+```{r}
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 10")
+
+pdf(file = "Figure.S10_Immune.pdf", width = 11, height = 4)
+
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("Log2(FPKM+1)") +
+       theme_classic(base_size = 8) + 
+       theme(axis.title.y=element_text(size=8)) + 
+       theme(axis.text.y=element_text(size=8)) +
+       theme(axis.text.x=element_text(size=8)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+
+dev.off()
+```
+
+
+
+******************** Supplementary 11A *************************
+
+```{r}
+# Open file (change the relative path accordingly)
+Figure.S11 <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 11/Supplementary Figure 11a/100_biopsies.txt", row.names=1)
+head(Figure.S11)
+
+
+library("ggpubr")
+
+ggscatter(Figure.S11, x = "NE_score", y = "IFNG_10genes_score", 
+          add = "reg.line", conf.int = TRUE, 
+          add.params = list(fill = "lightgray"),
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "NE Score", ylab = "IFNg Score (10 genes)", 
+          size = 1) 
+
+```
+```{r}
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 11/Supplementary Figure 11a")
+
+pdf(file = "IFNG signature_10 genes.pdf", width = 3.5, height = 2.6)
+
+ggscatter(Figure.S11, x = "NE_score", y = "IFNG_10genes_score", 
+          add = "reg.line", conf.int = TRUE, 
+          add.params = list(fill = "lightgray"),
+          cor.coef = FALSE, cor.method = "pearson",
+          xlab = "NE Score", ylab = "IFNg Score (10 genes)", 
+          size = 1) 
+
+dev.off()
+```
+
+
+
+
+```{r}
+# Open file (change the relative path accordingly)
+Figure.S11 <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 11/Supplementary Figure 11a/100_biopsies.txt", row.names=1)
+head(Figure.S11)
+
+
+library("ggpubr")
+
+ggscatter(Figure.S11, x = "NE_score", y = "IFNG_28genes_score", 
+          add = "reg.line", conf.int = TRUE, 
+          add.params = list(fill = "lightgray"),
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "NE Score", ylab = "IFNg Score (28 genes)", 
+          size = 1) 
+
+```
+
+
+```{r}
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 11/Supplementary Figure 11a")
+
+pdf(file = "IFNG signature_28 genes.pdf", width = 3.5, height = 2.6)
+
+ggscatter(Figure.S11, x = "NE_score", y = "IFNG_28genes_score", 
+          add = "reg.line", conf.int = TRUE, 
+          add.params = list(fill = "lightgray"),
+          cor.coef = FALSE, cor.method = "pearson",
+          xlab = "NE Score", ylab = "IFNg Score (28 genes)", 
+          size = 1) 
+
+dev.off()
+```
+
+
+
+******************** Supplementary 11A_2 *************************
+
+
+```{r}
+library("ggplot2")
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+Figure.S11_2 <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 11/Supplementary Figure 11a/IFNG_10genes_score.txt", row.names=1)
+head(Figure.S11_2)
+
+# Melt data
+melted <- melt(Figure.S11_2, id.vars="Subtype")
+
+# Order Subtype
+melted$variable <- factor(melted$variable, levels = c("IFNG_10genes_score"))
+
+# Create the boxplot
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("IFNg Score (10 genes)") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+```
+
+
+```{r}
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 11/Supplementary Figure 11a")
+
+pdf(file = "IFNG_10genes_score.pdf", width = 2.8, height = 2.5)
+
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("IFNg Score (10 genes)") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+
+dev.off()
+```
+
+
+
+
+```{r}
+library("ggplot2")
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+Figure.S11_2 <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 11/Supplementary Figure 11a/IFNG_28genes_score.txt", row.names=1)
+head(Figure.S11_2)
+
+# Melt data
+melted <- melt(Figure.S11_2, id.vars="Subtype")
+
+# Order Subtype
+melted$variable <- factor(melted$variable, levels = c("IFNG_28genes_score"))
+
+# Create the boxplot
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("IFNg Score (28 genes)") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+```
+
+
+```{r}
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 11/Supplementary Figure 11a")
+
+pdf(file = "IFNG_28genes_score.pdf", width = 2.8, height = 2.5)
+
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("IFNg Score (28 genes)") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+
+dev.off()
+```
+
+
+
+
+******************** Supplementary 11B *************************
+
+```{r}
+library(ggplot2)
+library(RColorBrewer)
+
+
+# Open file (change the relative path accordingly)
+LM6 <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 11/LM6/LM6.txt", row.names=1)
+head(LM6)
+
+# Calculate the percentage
+data_percentage <- apply(LM6, 2, function(x){x*100/sum(x,na.rm=T)})
+
+# Create the color
+color <- c("B cells" = "#fbb4ae", "CD8 T cells" = "#b3cde3", "CD4 T cells" = "#ccebc5", "NK cells" = "#decbe4", "Monocytes" = "#fed9a6", "Neutrophils" = "#ffffcc")
+
+# Create the barplot
+barplot(data_percentage, col=color , border="white", xlab="Patients", ylab="Relative Percent", cex.names= 0.2)
+
+```
+
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 11/LM6")
+
+pdf(file = "LM6.pdf", width = 10, height = 5)
+
+barplot(data_percentage, col=color , border="white", xlab="Patients", ylab="Relative Percent", cex.names= 0.2)
+
+dev.off()
+```
+
+
+******************** Supplementary 11C *************************
+
+```{r}
+library(ggplot2)
+library(plyr)
+library(RColorBrewer)
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+# Calculate the percentage before up-loading the data
+LM6.2 <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 11/LM6/LM6.2.txt", row.names=1)
+head(LM6.2)
+
+# Calculate average and SEM for each group
+melted <- melt(LM6.2, id.vars="Subtype")
+means_SEM <- ddply(melted, c("variable", "Subtype"), summarise, 
+                  mean=mean(value), 
+                  sem=sd(value)/sqrt(length(value))
+                  )
+
+
+#Draw bar plot 
+# To fill in the opposite order, replace 'fill=forcats::fct_rev(variable)' by 'fill=variable'
+ggplot(means_SEM, aes(x=Subtype, y=mean, fill=forcats::fct_rev(variable))) + 
+       geom_bar(stat="identity", width = 0.4) +    
+       xlab(" ") + ylab("Relative Percent") +
+       theme_classic(base_size = 16) + 
+       theme(axis.title.y=element_text(size=16)) + 
+       theme(axis.text.y=element_text(size=16, colour = "black")) +
+       theme(axis.text.x=element_text(size=16, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#ffffcc", "#fed9a6",  "#decbe4", "#ccebc5", "#b3cde3","#fbb4ae")) 
+```
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 11/LM6")
+
+pdf(file = "LM6.1.pdf", width = 3.5, height = 2.5)
+
+ggplot(means_SEM, aes(x=Subtype, y=mean, fill=forcats::fct_rev(variable))) + 
+       geom_bar(stat="identity", width = 0.6) +    
+       xlab(" ") + ylab("Relative Percent") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10, colour = "black")) +
+       theme(axis.text.x=element_text(size=10, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#ffffcc", "#fed9a6",  "#decbe4", "#ccebc5", "#b3cde3","#fbb4ae")) 
+
+dev.off()
+```
+
+
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+LM6.2 <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 11/LM6/LM6.2.txt", row.names=1)
+head(LM6.2)
+
+# Melt data
+melted <- melt(LM6.2 , id.vars="Subtype")
+
+# Order Subtype
+melted$variable <- factor(melted$variable, levels = c("NK.cells", "Neutrophils", "B.cells", "CD4.T.cells",  "CD8.T.cells", "Monocytes"))
+
+# Create the boxplot
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("Relative Percent") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+```
+
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 11/LM6")
+
+pdf(file = "LM6.2.pdf", width = 6, height = 2.6)
+
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("Relative Percent") +
+       theme_classic(base_size = 9) + 
+       theme(axis.title.y=element_text(size=9)) + 
+       theme(axis.text.y=element_text(size=9)) +
+       theme(axis.text.x=element_text(size=9)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+
+dev.off()
+```
+
+
+
+
+******************** Supplementary 11D *************************
+
+```{r}
+# Open file (change the relative path accordingly)
+Figure.S11d <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 11/Supplementary Figure 11b/NK_cell_signature.txt", row.names=1)
+head(Figure.S11d)
+
+
+library("ggpubr")
+
+ggscatter(Figure.S11d, x = "NE50", y = "NK_Score", 
+          add = "reg.line", conf.int = TRUE, 
+          add.params = list(fill = "lightgray"),
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "NE Score", ylab = "NK cell Score", 
+          size = 1) 
+
+```
+
+```{r}
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 11/Supplementary Figure 11b")
+
+pdf(file = "NK cells score correlation.pdf", width = 3.7, height = 2.6)
+
+ggscatter(Figure.S11d, x = "NE50", y = "NK_Score", 
+          add = "reg.line", conf.int = TRUE, 
+          add.params = list(fill = "lightgray"),
+          cor.coef = FALSE, cor.method = "pearson",
+          xlab = "NE Score", ylab = "NK cell Score", 
+          size = 1) 
+
+dev.off()
+```
+
+```{r}
+library("ggplot2")
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+Figure.S11_d2 <- read.delim("~/Desktop/Review/Final figures/Supplementary Figure 11/Supplementary Figure 11b/72 patients.txt", row.names=1)
+head(Figure.S11_d2)
+
+# Melt data
+melted <- melt(Figure.S11_d2, id.vars="Subtype")
+
+# Order Subtype
+melted$variable <- factor(melted$variable, levels = c("NK_Score"))
+
+# Create the boxplot
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("NK cell Score") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+```
+```{r}
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 11/Supplementary Figure 11b")
+
+pdf(file = "NK cells quantification.pdf", width = 3, height = 2.5)
+
+ggplot(melted, aes(x=variable, y=value, fill=Subtype)) +
+       geom_boxplot(outlier.colour="white") +
+       xlab(" ") + ylab("NK cell Score") +
+       theme_classic(base_size = 10) + 
+       theme(axis.title.y=element_text(size=10)) + 
+       theme(axis.text.y=element_text(size=10)) +
+       theme(axis.text.x=element_text(size=10)) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c("#fb6a4a", "#31a354")) + 
+       geom_point(position=position_jitterdodge(), colour = "black", alpha=0.4, size = 1)
+
+dev.off()
+```
+
+
+******************** Supplementary 12D *************************
+
+
+```{r}
+library(survminer)
+ 
+# Open file (change the relative path accordingly)
+# Calculate the percentage before up-loading the data
+Figure.6c <- read_excel("~/Desktop/Review/Final figures/Figure 6/Survival curves.xlsx", sheet = "On study only")
+head(Figure.6c)
+
+library(survival)
+fit <- survfit(Surv(PFS, PFS_Status) ~ Study,
+               data = Figure.6c)
+
+# Visualize with survminer
+ggsurvplot(fit, data = Figure.6c, 
+           risk.table = TRUE, 
+           risk.table.y.text.col = TRUE, # colour risk table text annotations.
+           risk.table.y.text = TRUE, # show bars instead of names in text annotations (FALSE)
+           tables.height = 0.2,
+           tables.theme = theme_cleantable(), fontsize = 3, # theme and font of the table
+           ncensor.plot = FALSE,      # plot the number of censored subjects at time t
+           surv.median.line = "hv",  # add the median survival pointer.
+           xlab="Time from start of therapy (months)",
+           ylab="PFS",
+           font.main = c(8), font.x = c(10), font.y = c(10), font.tickslab = c(8), 
+           legend.labs = c("ATRi", "ICI"), # change legend labels.
+           legend.title = "Trial",
+           pval = TRUE, pval.coord=c(-1.2,0.005), pval.size = 3,  # Add p-value and intervals
+           palette = c("#80cdc1", "#dfc27d"))
+ 
+```
+
+
+******************** Supplementary 12A *************************
+
+```{r}
+library(survminer)
+library(survival)
+# Open file (change the relative path accordingly)
+# Calculate the percentage before up-loading the data
+Figure.S12a <- read_excel("~/Desktop/Review/Final figures/Figure 6/Survival curves.xlsx", sheet = "On study only")
+head(Figure.S12a)
+
+
+# compute kaplan-Meier survival estimate
+fit <- survfit(Surv(OS_diagnosis, Survival_Status) ~ Study, data = Figure.S12a)
+
+# Give median and 95%CI
+fit
+
+# Calculate p-value with Log-rank test
+data.survdiff <- survdiff(Surv(OS_diagnosis, Survival_Status) ~ Study, data = Figure.S12a)
+data.survdiff
+
+# Calculate HR and 95%CI using the log-rank test
+HR = (data.survdiff$obs[2]/data.survdiff$exp[2])/(data.survdiff$obs[1]/data.survdiff$exp[1])
+HR
+low95 = exp(log(HR) - qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+low95
+up95 = exp(log(HR) + qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+up95
+
+# Calculate HR and 95%CI using the log-rank test (reciproqual)
+HR_2 = (data.survdiff$obs[1]/data.survdiff$exp[1])/(data.survdiff$obs[2]/data.survdiff$exp[2])
+HR_2
+low95_2 = exp(log(HR_2) - qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+low95_2
+up95_2 = exp(log(HR_2) + qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+up95_2
+
+
+# Visualize with survminer
+OS_ATRi_ICI <- ggsurvplot(fit, data = Figure.S12a, 
+           risk.table = TRUE, 
+           risk.table.y.text.col = TRUE, # colour risk table text annotations.
+           risk.table.y.text = TRUE, # show bars instead of names in text annotations (FALSE)
+           tables.height = 0.15,
+           tables.theme = theme_cleantable(), fontsize = 6, # theme and font of the table
+           ncensor.plot = FALSE,      # plot the number of censored subjects at time t
+           # surv.median.line = "hv",  # add the median survival pointer.
+           xlab="Time from diagnosis (months)",
+           ylab="OS",
+           font.main = c(16), font.x = c(16), font.y = c(16), font.tickslab = c(16), 
+           legend.labs = c("ATRi", "ICI"), # change legend labels.
+           legend.title = "Trial",
+           pval = TRUE, pval.coord=c(-1.2,0.005), pval.size = 6,  # Add p-value and intervals
+           palette = c("#80cdc1", "#dfc27d"))
+OS_ATRi_ICI
+
+# Save
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 12")
+
+pdf("OS_ATRi_ICI.pdf")
+print(OS_ATRi_ICI)
+dev.off()
+ 
+```
+
+******************** Supplementary 12B *************************
+
+```{r}
+library(survminer)
+library(survival)
+# Open file (change the relative path accordingly)
+# Calculate the percentage before up-loading the data
+Figure.S12b <- read_excel("~/Desktop/Review/Final figures/Figure 6/Survival curves.xlsx", sheet = "All patients")
+head(Figure.S12b)
+
+
+# compute kaplan-Meier survival estimate
+fit <- survfit(Surv(OS_diagnosis, Survival_Status) ~ Disease, data = Figure.S12b)
+
+# Give median and 95%CI
+fit
+
+# Calculate p-value with Log-rank test
+data.survdiff <- survdiff(Surv(OS_diagnosis, Survival_Status) ~ Disease, data = Figure.S12b)
+data.survdiff
+
+# Calculate HR and 95%CI using the log-rank test
+HR = (data.survdiff$obs[2]/data.survdiff$exp[2])/(data.survdiff$obs[1]/data.survdiff$exp[1])
+HR
+low95 = exp(log(HR) - qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+low95
+up95 = exp(log(HR) + qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+up95
+
+# Calculate HR and 95%CI using the log-rank test (reciproqual)
+HR_2 = (data.survdiff$obs[1]/data.survdiff$exp[1])/(data.survdiff$obs[2]/data.survdiff$exp[2])
+HR_2
+low95_2 = exp(log(HR_2) - qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+low95_2
+up95_2 = exp(log(HR_2) + qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+up95_2
+
+
+# Visualize with survminer
+OS_SCLC_EPSCC <- ggsurvplot(fit, data = Figure.S12b, 
+           risk.table = TRUE, 
+           risk.table.y.text.col = TRUE, # colour risk table text annotations.
+           risk.table.y.text = TRUE, # show bars instead of names in text annotations (FALSE)
+           tables.height = 0.15,
+           tables.theme = theme_cleantable(), fontsize = 6, # theme and font of the table
+           ncensor.plot = FALSE,      # plot the number of censored subjects at time t
+           # surv.median.line = "hv",  # add the median survival pointer.
+           xlab="Time from diagnosis (months)",
+           ylab="OS",
+           font.main = c(16), font.x = c(16), font.y = c(16), font.tickslab = c(16), 
+           legend.labs = c("EPSCC", "SCLC"), # change legend labels.
+           legend.title = "Disease",
+           pval = TRUE, pval.coord=c(-1.2,0.005), pval.size = 6,  # Add p-value and intervals
+           palette = c("#2E9FDF", "#E7B800"))
+OS_SCLC_EPSCC
+
+# Save
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 12")
+
+pdf("OS_SCLC_EPSCC.pdf")
+print(OS_SCLC_EPSCC)
+dev.off()
+ 
+```
+
+******************** Supplementary 12C *************************
+
+```{r}
+library(survminer)
+library(survival)
+# Open file (change the relative path accordingly)
+# Calculate the percentage before up-loading the data
+Figure.S12c <- read_excel("~/Desktop/Review/Final figures/Figure 6/Survival curves.xlsx", sheet = "On study only")
+head(Figure.S12c)
+
+
+# compute kaplan-Meier survival estimate
+fit <- survfit(Surv(PFS, PFS_Status) ~ Study, data = Figure.S12c)
+
+# Give median and 95%CI
+fit
+
+# Calculate p-value with Log-rank test
+data.survdiff <- survdiff(Surv(PFS, PFS_Status) ~ Study, data = Figure.S12c)
+data.survdiff
+
+# Calculate HR and 95%CI using the log-rank test
+HR = (data.survdiff$obs[2]/data.survdiff$exp[2])/(data.survdiff$obs[1]/data.survdiff$exp[1])
+HR
+low95 = exp(log(HR) - qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+low95
+up95 = exp(log(HR) + qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+up95
+
+# Calculate HR and 95%CI using the log-rank test (reciproqual)
+HR_2 = (data.survdiff$obs[1]/data.survdiff$exp[1])/(data.survdiff$obs[2]/data.survdiff$exp[2])
+HR_2
+low95_2 = exp(log(HR_2) - qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+low95_2
+up95_2 = exp(log(HR_2) + qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+up95_2
+
+
+# Visualize with survminer
+PFS_ATRi_ICI <- ggsurvplot(fit, data = Figure.S12c, 
+           risk.table = TRUE, 
+           risk.table.y.text.col = TRUE, # colour risk table text annotations.
+           risk.table.y.text = TRUE, # show bars instead of names in text annotations (FALSE)
+           tables.height = 0.15,
+           tables.theme = theme_cleantable(), fontsize = 6, # theme and font of the table
+           ncensor.plot = FALSE,      # plot the number of censored subjects at time t
+           # surv.median.line = "hv",  # add the median survival pointer.
+           xlab="Time from start of therapy (months)",
+           ylab="PFS",
+           font.main = c(16), font.x = c(16), font.y = c(16), font.tickslab = c(16), 
+           legend.labs = c("ATRi", "ICI"), # change legend labels.
+           legend.title = "Trial",
+           pval = TRUE, pval.coord=c(-1.2,0.005), pval.size = 6,  # Add p-value and intervals
+           palette = c("#80cdc1", "#dfc27d"))
+PFS_ATRi_ICI
+
+# Save
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 12")
+
+pdf("PFS_ATRi_ICI.pdf")
+print(PFS_ATRi_ICI)
+dev.off()
+```
+******************** Supplementary 12D *************************
+
+```{r}
+library(survminer)
+library(survival)
+# Open file (change the relative path accordingly)
+# Calculate the percentage before up-loading the data
+Figure.S12d <- read_excel("~/Desktop/Review/Final figures/Figure 6/Survival curves.xlsx", sheet = "On study only")
+head(Figure.S12d)
+
+
+# compute kaplan-Meier survival estimate
+fit <- survfit(Surv(OS_diagnosis, Survival_Status) ~ Transporter, data = Figure.S12d)
+
+# Give median and 95%CI
+fit
+
+# Calculate p-value with Log-rank test
+data.survdiff <- survdiff(Surv(OS_diagnosis, Survival_Status) ~ Transporter, data = Figure.S12d)
+data.survdiff
+
+# Calculate HR and 95%CI using the log-rank test
+HR = (data.survdiff$obs[2]/data.survdiff$exp[2])/(data.survdiff$obs[1]/data.survdiff$exp[1])
+HR
+low95 = exp(log(HR) - qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+low95
+up95 = exp(log(HR) + qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+up95
+
+# Calculate HR and 95%CI using the log-rank test (reciproqual)
+HR_2 = (data.survdiff$obs[1]/data.survdiff$exp[1])/(data.survdiff$obs[2]/data.survdiff$exp[2])
+HR_2
+low95_2 = exp(log(HR_2) - qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+low95_2
+up95_2 = exp(log(HR_2) + qnorm(0.975)*sqrt(1/data.survdiff$exp[2]+1/data.survdiff$exp[1]))
+up95_2
+
+
+# Visualize with survminer
+OS_Transporter_Other <- ggsurvplot(fit, data = Figure.S12d, 
+           risk.table = TRUE, 
+           risk.table.y.text.col = TRUE, # colour risk table text annotations.
+           risk.table.y.text = TRUE, # show bars instead of names in text annotations (FALSE)
+           tables.height = 0.15,
+           tables.theme = theme_cleantable(), fontsize = 6, # theme and font of the table
+           ncensor.plot = FALSE,      # plot the number of censored subjects at time t
+           # surv.median.line = "hv",  # add the median survival pointer.
+           xlab="Time from diagnosis (months)",
+           ylab="OS",
+           font.main = c(16), font.x = c(16), font.y = c(16), font.tickslab = c(16), 
+           legend.labs = c( "Other", "NEv2"), # change legend labels.
+           legend.title = "Subtype",
+           pval = TRUE, pval.coord=c(-1.2,0.005), pval.size = 6,  # Add p-value and intervals
+           palette = c("#d8daeb","#542788"))
+OS_Transporter_Other
+
+# Save
+setwd("~/Desktop/Review/Final figures/Supplementary Figure 12")
+
+pdf("OS_Transporter_Other.pdf")
+print(OS_Transporter_Other)
+dev.off()
+```
+
+
+**************** ADDITIONAL FIGURES **********************
+
+ATOH1 PCA, 100 biopsies
+```{r}
+# Open libraries
+library("ggfortify")
+library("ggplot2")
+
+# Open file (change the relative path accordingly)
+ATOH1_100 <- read.delim("~/Desktop/Review/Final figures/Additional Figures/PCA ATOH1/ATOH1_100 biopsies.txt", row.names=1)
+head(ATOH1_100)
+
+# Generate the PCA
+pca_res <- prcomp(ATOH1_100[2:6], scale = TRUE)
+summary(pca_res)
+
+
+# Plot PCA
+autoplot(pca_res, data = ATOH1_100, colour = 'Subtype',
+         loadings = TRUE, loadings.colour = 'yellow',loadings.label = TRUE, loadings.label.size = 2.5, loadings.label.colour ="black",
+         scale = FALSE,
+         size = 5) + theme_classic() + scale_colour_manual(values=c("SCNC-A" = "#fc8d59", "SCNC-N" = "#e6f598", "SCNC-Y" = "#74add1",   "SCNC-P" = "#67001f", "ATOH1" = "#8856a7"))
+```
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Additional Figures/PCA ATOH1")
+
+pdf(file = "ATOH1_PCA_100 biopsies.pdf", width = 5, height = 3)
+
+autoplot(pca_res, data = ATOH1_100, colour = 'Subtype',
+         loadings = FALSE,
+         scale = FALSE,
+         size = 5) + theme_classic() + scale_colour_manual(values=c("SCNC-A" = "#fc8d59", "SCNC-N" = "#e6f598", "SCNC-Y" = "#74add1",   "SCNC-P" = "#67001f", "ATOH1" = "#8856a7"))
+
+dev.off()
+```
+
+
+ATOH1 PCA, 72 patients
+```{r}
+# Open libraries
+library("ggfortify")
+library("ggplot2")
+
+# Open file (change the relative path accordingly)
+ATOH1_72 <- read.delim("~/Desktop/Review/Final figures/Additional Figures/PCA ATOH1/ATOH1_72 patients.txt", row.names=1)
+head(ATOH1_72)
+
+# Generate the PCA
+pca_res <- prcomp(ATOH1_72[2:6], scale = TRUE)
+summary(pca_res)
+
+
+# Plot PCA
+autoplot(pca_res, data = ATOH1_72, colour = 'Subtype',
+         loadings = TRUE, loadings.colour = 'yellow',loadings.label = TRUE, loadings.label.size = 2.5, loadings.label.colour ="black",
+         scale = FALSE,
+         size = 5) + theme_classic() + scale_colour_manual(values=c("SCNC-A" = "#fc8d59", "SCNC-N" = "#e6f598", "SCNC-Y" = "#74add1",   "SCNC-P" = "#67001f", "ATOH1" = "#8856a7"))
+```
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Additional Figures/PCA ATOH1")
+
+pdf(file = "ATOH1_PCA_72 patients.pdf", width = 5, height = 3)
+
+autoplot(pca_res, data = ATOH1_72, colour = 'Subtype',
+         loadings = FALSE, 
+         scale = FALSE,
+         size = 5) + theme_classic() + scale_colour_manual(values=c("SCNC-A" = "#fc8d59", "SCNC-N" = "#e6f598", "SCNC-Y" = "#74add1",   "SCNC-P" = "#67001f", "ATOH1" = "#8856a7"))
+
+dev.off()
+```
+
+
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(RColorBrewer)
+
+piechart_data <- read_excel("~/Desktop/Review/Final figures/Additional Figures/Clinical Data/Pie_charts.xlsx", sheet = "ICI_Res")
+head(piechart_data)
+
+# Compute the position of labels 
+piechart_data <- piechart_data %>% 
+                 arrange(desc(Group)) %>%
+                 mutate(prop = Value / sum(piechart_data$Value) *100) %>%
+                 mutate(ypos = cumsum(prop)- 0.5*prop)
+
+# Basic piechart
+ggplot(piechart_data, aes(x="", y=prop, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() + 
+  theme(legend.position="none") +
+  
+  geom_text(aes(y = ypos, label = Group), color = "black", size=4) +
+  scale_fill_manual(values =c("#fb6a4a", "#31a354"))
+```
+
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Additional Figures/Clinical Data")
+
+pdf(file = "Pie Chart_ICI_Res.pdf", width = 2, height = 2)
+
+ggplot(piechart_data, aes(x="", y=prop, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() + 
+  theme(legend.position="none") +
+  
+  geom_text(aes(y = ypos, label = Group), color = "black", size=1.8) +
+  scale_fill_manual(values =c("#fb6a4a", "#31a354"))
+dev.off()
+```
+
+
+
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+```{r}
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(RColorBrewer)
+
+piechart_data <- read_excel("~/Desktop/Review/Final figures/Additional Figures/Clinical Data/Pie_charts.xlsx", sheet = "ATRi_Res")
+head(piechart_data)
+
+# Compute the position of labels 
+piechart_data <- piechart_data %>% 
+                 arrange(desc(Group)) %>%
+                 mutate(prop = Value / sum(piechart_data$Value) *100) %>%
+                 mutate(ypos = cumsum(prop)- 0.5*prop)
+
+# Basic piechart
+ggplot(piechart_data, aes(x="", y=prop, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() + 
+  theme(legend.position="none") +
+  
+  geom_text(aes(y = ypos, label = Group), color = "black", size=4) +
+  scale_fill_manual(values =c("#fb6a4a", "#31a354"))
+```
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Additional Figures/Clinical Data")
+
+pdf(file = "Pie Chart_ATRi_Res.pdf", width = 2, height = 2)
+
+ggplot(piechart_data, aes(x="", y=prop, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() + 
+  theme(legend.position="none") +
+  
+  geom_text(aes(y = ypos, label = Group), color = "black", size=1.8) +
+  scale_fill_manual(values =c("#fb6a4a", "#31a354"))
+dev.off()
+```
+
+
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(RColorBrewer)
+
+piechart_data <- read_excel("~/Desktop/Review/Final figures/Additional Figures/Clinical Data/Pie_charts.xlsx", sheet = "ICI_CB")
+head(piechart_data)
+
+# Compute the position of labels 
+piechart_data <- piechart_data %>% 
+                 arrange(desc(Group)) %>%
+                 mutate(prop = Value / sum(piechart_data$Value) *100) %>%
+                 mutate(ypos = cumsum(prop)- 0.5*prop)
+
+# Basic piechart
+ggplot(piechart_data, aes(x="", y=prop, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() + 
+  theme(legend.position="none") +
+  
+  geom_text(aes(y = ypos, label = Group), color = "black", size=4) +
+  scale_fill_manual(values =c("#fb6a4a", "#31a354"))
+```
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Additional Figures/Clinical Data")
+
+pdf(file = "Pie Chart_ICI_CB.pdf", width = 2, height = 2)
+
+ggplot(piechart_data, aes(x="", y=prop, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() + 
+  theme(legend.position="none") +
+  
+  geom_text(aes(y = ypos, label = Group), color = "black", size=1.8) +
+  scale_fill_manual(values =c("#fb6a4a", "#31a354"))
+dev.off()
+```
+
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(RColorBrewer)
+
+piechart_data <- read_excel("~/Desktop/Review/Final figures/Additional Figures/Clinical Data/Pie_charts.xlsx", sheet = "ATRi_CB")
+head(piechart_data)
+
+# Compute the position of labels 
+piechart_data <- piechart_data %>% 
+                 arrange(desc(Group)) %>%
+                 mutate(prop = Value / sum(piechart_data$Value) *100) %>%
+                 mutate(ypos = cumsum(prop)- 0.5*prop)
+
+# Basic piechart
+ggplot(piechart_data, aes(x="", y=prop, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() + 
+  theme(legend.position="none") +
+  
+  geom_text(aes(y = ypos, label = Group), color = "black", size=4) +
+  scale_fill_manual(values =c("#fb6a4a", "#31a354"))
+```
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Additional Figures/Clinical Data")
+
+pdf(file = "Pie Chart_ATRi_CB.pdf", width = 2, height = 2)
+
+ggplot(piechart_data, aes(x="", y=prop, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() + 
+  theme(legend.position="none") +
+  
+  geom_text(aes(y = ypos, label = Group), color = "black", size=1.8) +
+  scale_fill_manual(values =c("#fb6a4a", "#31a354"))
+dev.off()
+```
+
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(plyr)
+library(RColorBrewer)
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+# Calculate the percentage before up-loading the data
+Figure.6 <- read_excel("~/Desktop/Review/Final figures/Additional Figures/Clinical Data/Barplot.xlsx", sheet = "Response")
+head(Figure.6)
+
+
+# Order Subtype
+Figure.6$Subtype <- factor(Figure.6$Subtype, levels = c("Non responder", "NE", "Non-NE"))
+
+# Draw bar plot 
+# To fill in the opposite order, replace 'fill=forcts::fct_rev(variable)' by 'fill=variable'
+ggplot(Figure.6, aes(x=Drug, y=Percent, fill=Subtype)) + 
+       geom_bar(stat="identity", width = 0.4) +    
+       xlab(" ") + ylab("") +
+       scale_y_continuous(name="Response rate (%)", limits=c(0, 120)) +
+       theme_classic(base_size = 12) + 
+       theme(axis.title.y=element_text(size=12)) + 
+       theme(axis.text.y=element_text(size=12, colour = "black")) +
+       theme(axis.text.x=element_text(size=12, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c ("#f0f0f0", "#fb6a4a", "#31a354")) 
+```
+
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Additional Figures/Clinical Data")
+
+pdf(file = "Barplot_Response.pdf", width = 5, height = 3.5)
+
+ggplot(Figure.6, aes(x=Drug, y=Percent, fill=Subtype)) + 
+       geom_bar(stat="identity", width = 0.4) +    
+       xlab(" ") + ylab("") +
+       scale_y_continuous(name="Response rate (%)", limits=c(0, 120)) +
+       theme_classic(base_size = 12) + 
+       theme(axis.title.y=element_text(size=12)) + 
+       theme(axis.text.y=element_text(size=12, colour = "black")) +
+       theme(axis.text.x=element_text(size=12, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c ("#f0f0f0", "#fb6a4a", "#31a354")) 
+
+dev.off()
+```
+
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(plyr)
+library(RColorBrewer)
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+# Calculate the percentage before up-loading the data
+Figure.6 <- read_excel("~/Desktop/Review/Final figures/Additional Figures/Clinical Data/Barplot.xlsx", sheet = "CB")
+head(Figure.6)
+
+
+# Order Subtype
+Figure.6$Subtype <- factor(Figure.6$Subtype, levels = c("No CB", "NE", "Non-NE"))
+
+# Draw bar plot 
+# To fill in the opposite order, replace 'fill=forcts::fct_rev(variable)' by 'fill=variable'
+ggplot(Figure.6, aes(x=Drug, y=Percent, fill=Subtype)) + 
+       geom_bar(stat="identity", width = 0.4) +    
+       xlab(" ") + ylab("") +
+       scale_y_continuous(name="Clinical benefit rate (%)", limits=c(0, 120)) +
+       theme_classic(base_size = 12) + 
+       theme(axis.title.y=element_text(size=12)) + 
+       theme(axis.text.y=element_text(size=12, colour = "black")) +
+       theme(axis.text.x=element_text(size=12, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c ("#f0f0f0", "#fb6a4a", "#31a354")) 
+```
+
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Additional Figures/Clinical Data")
+
+pdf(file = "Barplot_CB.pdf", width = 5, height = 3.5)
+
+ggplot(Figure.6, aes(x=Drug, y=Percent, fill=Subtype)) + 
+       geom_bar(stat="identity", width = 0.4) +    
+       xlab(" ") + ylab("") +
+       scale_y_continuous(name="Clinical benefit rate (%)", limits=c(0, 120)) +
+       theme_classic(base_size = 12) + 
+       theme(axis.title.y=element_text(size=12)) + 
+       theme(axis.text.y=element_text(size=12, colour = "black")) +
+       theme(axis.text.x=element_text(size=12, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c ("#f0f0f0", "#fb6a4a", "#31a354"))  
+
+dev.off()
+```
+
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(plyr)
+library(RColorBrewer)
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+# Calculate the percentage before up-loading the data
+Figure.6 <- read_excel("~/Desktop/Review/Final figures/Additional Figures/Clinical Data/Barplot.xlsx", sheet = "CB_2")
+head(Figure.6)
+
+
+# Order Subtype
+Figure.6$Benefit <- factor(Figure.6$Benefit, levels = c("No CB", "CB"))
+Figure.6$Subtype <- factor(Figure.6$Subtype, levels = c("ATRi (NE)", "ICI (NE)", "ATRi (Non-NE)", "ICI (Non-NE)"))
+
+# Draw bar plot 
+# To fill in the opposite order, replace 'fill=forcts::fct_rev(variable)' by 'fill=variable'
+ggplot(Figure.6, aes(x=Subtype, y=Percent, fill=Benefit)) + 
+       geom_bar(stat="identity", width = 0.4) +    
+       xlab(" ") + ylab("") +
+       scale_y_continuous(name="Clinical benefit rate (%)", limits=c(0, 120)) +
+       theme_classic(base_size = 12) + 
+       theme(axis.title.y=element_text(size=12)) + 
+       theme(axis.text.y=element_text(size=12, colour = "black")) +
+       theme(axis.text.x=element_text(size=12, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c ("#f0f0f0", "#5ab4ac")) 
+```
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Additional Figures/Clinical Data")
+
+pdf(file = "Barplot_CB_2.pdf", width = 5, height = 3.5)
+
+ggplot(Figure.6, aes(x=Subtype, y=Percent, fill=Benefit)) + 
+       geom_bar(stat="identity", width = 0.4) +    
+       xlab(" ") + ylab("") +
+       scale_y_continuous(name="Clinical benefit rate (%)", limits=c(0, 120)) +
+       theme_classic(base_size = 9) + 
+       theme(axis.title.y=element_text(size=9)) + 
+       theme(axis.text.y=element_text(size=9, colour = "black")) +
+       theme(axis.text.x=element_text(size=9, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c ("#f0f0f0", "#5ab4ac")) 
+
+dev.off()
+```
+
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(plyr)
+library(RColorBrewer)
+library(reshape2)
+ 
+# Open file (change the relative path accordingly)
+# Calculate the percentage before up-loading the data
+Figure.6 <- read_excel("~/Desktop/Review/Final figures/Additional Figures/Clinical Data/Barplot.xlsx", sheet = "Response_2")
+head(Figure.6)
+
+
+# Order Subtype
+Figure.6$Response <- factor(Figure.6$Response, levels = c("Non responder", "Responder"))
+Figure.6$Subtype <- factor(Figure.6$Subtype, levels = c("ATRi (NE)", "ICI (NE)", "ATRi (Non-NE)", "ICI (Non-NE)"))
+
+# Draw bar plot 
+# To fill in the opposite order, replace 'fill=forcts::fct_rev(variable)' by 'fill=variable'
+ggplot(Figure.6, aes(x=Subtype, y=Percent, fill=Response)) + 
+       geom_bar(stat="identity", width = 0.4) +    
+       xlab(" ") + ylab("") +
+       scale_y_continuous(name="Response rate (%)", limits=c(0, 120)) +
+       theme_classic(base_size = 12) + 
+       theme(axis.title.y=element_text(size=12)) + 
+       theme(axis.text.y=element_text(size=12, colour = "black")) +
+       theme(axis.text.x=element_text(size=12, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c ("#f0f0f0", "#5ab4ac"))
+```
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Additional Figures/Clinical Data")
+
+pdf(file = "Barplot_Response_2.pdf", width = 5.5, height = 3.5)
+
+ggplot(Figure.6, aes(x=Subtype, y=Percent, fill=Response)) + 
+       geom_bar(stat="identity", width = 0.4) +    
+       xlab(" ") + ylab("") +
+       scale_y_continuous(name="Response rate (%)", limits=c(0, 120)) +
+       theme_classic(base_size = 9) + 
+       theme(axis.title.y=element_text(size=9)) + 
+       theme(axis.text.y=element_text(size=9, colour = "black")) +
+       theme(axis.text.x=element_text(size=9, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c ("#f0f0f0", "#5ab4ac"))
+
+dev.off()
+```
+
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(plyr)
+library(RColorBrewer)
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+# Calculate the percentage before up-loading the data
+Figure.6 <- read_excel("~/Desktop/Review/Final figures/Additional Figures/Clinical Data/Barplot.xlsx", sheet = "Response_3")
+head(Figure.6)
+
+
+# Order Subtype
+Figure.6$Subtype <- factor(Figure.6$Subtype, levels = c("NE", "Non-NE"))
+
+
+# Draw bar plot 
+# To fill in the opposite order, replace 'fill=forcts::fct_rev(variable)' by 'fill=variable'
+ggplot(Figure.6, aes(x=Drug, y=Percent, fill=Subtype)) + 
+       geom_bar(stat="identity", width = 0.4) +    
+       xlab(" ") + ylab("") +
+       scale_y_continuous(name="Response rate (%)", limits=c(0, 120)) +
+       theme_classic(base_size = 12) + 
+       theme(axis.title.y=element_text(size=12)) + 
+       theme(axis.text.y=element_text(size=12, colour = "black")) +
+       theme(axis.text.x=element_text(size=12, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c ("#fb6a4a", "#31a354")) 
+```
+
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Additional Figures/Clinical Data")
+
+pdf(file = "Barplot_Response_3.pdf", width = 5, height = 3.5)
+
+ggplot(Figure.6, aes(x=Drug, y=Percent, fill=Subtype)) + 
+       geom_bar(stat="identity", width = 0.4) +    
+       xlab(" ") + ylab("") +
+       scale_y_continuous(name="Response rate (%)", limits=c(0, 120)) +
+       theme_classic(base_size = 12) + 
+       theme(axis.title.y=element_text(size=12)) + 
+       theme(axis.text.y=element_text(size=12, colour = "black")) +
+       theme(axis.text.x=element_text(size=12, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c ("#fb6a4a", "#31a354")) 
+
+dev.off()
+```
+
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(plyr)
+library(RColorBrewer)
+library(reshape2)
+
+# Open file (change the relative path accordingly)
+# Calculate the percentage before up-loading the data
+Figure.6 <- read_excel("~/Desktop/Review/Final figures/Additional Figures/Clinical Data/Barplot.xlsx", sheet = "CB_3")
+head(Figure.6)
+
+
+# Order Subtype
+Figure.6$Subtype <- factor(Figure.6$Subtype, levels = c("NE", "Non-NE"))
+
+
+# Draw bar plot 
+# To fill in the opposite order, replace 'fill=forcts::fct_rev(variable)' by 'fill=variable'
+ggplot(Figure.6, aes(x=Drug, y=Percent, fill=Subtype)) + 
+       geom_bar(stat="identity", width = 0.4) +    
+       xlab(" ") + ylab("") +
+       scale_y_continuous(name="Clinical benefit rate (%)", limits=c(0, 120)) +
+       theme_classic(base_size = 12) + 
+       theme(axis.title.y=element_text(size=12)) + 
+       theme(axis.text.y=element_text(size=12, colour = "black")) +
+       theme(axis.text.x=element_text(size=12, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c ("#fb6a4a", "#31a354")) 
+```
+```{r}
+# Save the figure
+setwd("~/Desktop/Review/Final figures/Additional Figures/Clinical Data")
+
+pdf(file = "Barplot_CB_3.pdf", width = 5, height = 3.5)
+
+ggplot(Figure.6, aes(x=Drug, y=Percent, fill=Subtype)) + 
+       geom_bar(stat="identity", width = 0.4) +    
+       xlab(" ") + ylab("") +
+       scale_y_continuous(name="Clinical benefit rate (%)", limits=c(0, 120)) +
+       theme_classic(base_size = 12) + 
+       theme(axis.title.y=element_text(size=12)) + 
+       theme(axis.text.y=element_text(size=12, colour = "black")) +
+       theme(axis.text.x=element_text(size=12, colour = "black")) +
+       theme(legend.position="right", legend.title = element_blank()) +
+       scale_fill_manual(values=c ("#fb6a4a", "#31a354")) 
+dev.off()
+```
+
+Other
+```{r}
+p.adjust(x, method = "BH") # Benjamini–Hochberg correction
+
+wilcox.test(y, z, paired = FALSE) # Mann-Whitney test
+```
+
